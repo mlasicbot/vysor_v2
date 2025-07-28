@@ -1,0 +1,5 @@
+This is a test file to demonstrate the @ functionality in Vysor.
+
+You can reference this file in your chat by typing @test-file.txt
+
+This file contains some sample content that can be used as context for the AI assistant. 
