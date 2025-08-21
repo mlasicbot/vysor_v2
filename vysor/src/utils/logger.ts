@@ -22,23 +22,37 @@ export class Logger {
    * Call once in activate(context) to enable file logging.
    */
   static async init(context: vscode.ExtensionContext, filename = 'vysor.log') {
-    const logDir = context.logUri.fsPath; // dedicated per-session/per-extension log dir
-    await fsp.mkdir(logDir, { recursive: true });
-    const filePath = path.join(logDir, filename);
-
-    const logger = Logger.getInstance();
-    logger.logFilePath = filePath;
-
-    // Optional: rotate if huge (>5 MB)
     try {
-      const st = await fsp.stat(filePath);
-      if (st.size > 5 * 1024 * 1024) {
-        const rotated = filePath.replace(/\.log$/, `-${Date.now()}.log`);
-        await fsp.rename(filePath, rotated);
-      }
-    } catch { /* ignore if file doesn't exist */ }
+      // Check if context.logUri is available (might not be during development)
+      if (context.logUri) {
+        const logDir = context.logUri.fsPath; // dedicated per-session/per-extension log dir
+        await fsp.mkdir(logDir, { recursive: true });
+        const filePath = path.join(logDir, filename);
 
-    logger.info(`File logging enabled at: ${filePath}`);
+        const logger = Logger.getInstance();
+        logger.logFilePath = filePath;
+
+        // Optional: rotate if huge (>5 MB)
+        try {
+          const st = await fsp.stat(filePath);
+          if (st.size > 5 * 1024 * 1024) {
+            const rotated = filePath.replace(/\.log$/, `-${Date.now()}.log`);
+            await fsp.rename(filePath, rotated);
+          }
+        } catch { /* ignore if file doesn't exist */ }
+
+        logger.info(`File logging enabled at: ${filePath}`);
+      } else {
+        // Fallback for development or when logUri is not available
+        const logger = Logger.getInstance();
+        logger.info('File logging not available (context.logUri is undefined) - using OutputChannel only');
+      }
+    } catch (error) {
+      // Fallback if file logging setup fails
+      const logger = Logger.getInstance();
+      logger.error('Failed to initialize file logging', error);
+      logger.info('Falling back to OutputChannel only');
+    }
   }
 
   static getInstance(): Logger {

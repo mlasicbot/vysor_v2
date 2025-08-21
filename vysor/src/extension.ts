@@ -9,32 +9,60 @@ import { ChatViewProvider } from './webviewHost/chatViewProvider';
 
 export async function activate(context: vscode.ExtensionContext) {
   // 1) Logger (OutputChannel + file at context.logUri)
-  await Logger.init(context);
+  // console.log(">>> Vysor activate() called");
+  
+  try {
+    await Logger.init(context);
+    const log = Logger.getInstance();
+    log.info('Activating Vysor…');
+  } catch (error) {
+    console.error('Failed to initialize Logger:', error);
+    // Continue without file logging, but show error
+    vscode.window.showErrorMessage(`Vysor: Failed to initialize logging: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  
   const log = Logger.getInstance();
-  log.info('Activating Vysor…');
 
   try {
     // 2) Load settings
+    log.info('Loading configuration...');
     const cfg = ConfigManager.getInstance().getConfig();
+    log.info('Configuration loaded successfully', { config: cfg });
 
     // 3) Build orchestrator
+    log.info('Building orchestrator...');
     const orchestrator = new Orchestrator({
       plannerBaseUrl: cfg.plannerBaseUrl,
       maxIterations: cfg.maxIterations,
       requestTimeoutMs: cfg.requestTimeoutMs,
       modelName: cfg.modelName,
     });
+    log.info('Orchestrator built successfully');
 
-    // 4) Register the chat webview view ( Activity Bar → “Vysor” → “Vysor Chat” )
+    // 4) Register the chat webview view ( Activity Bar → "Vysor" → "Vysor Chat" )
+    log.info('Registering ChatViewProvider...');
     const provider = new ChatViewProvider(context, orchestrator, log);
+    log.info('ChatViewProvider created successfully');
+    
+    log.info('Registering webview view provider with ID: vysor.chatView');
+    log.info('=== REGISTERING WEBVIEW VIEW PROVIDER ===');
+    log.info('Provider object created:', { providerType: typeof provider, hasResolveMethod: typeof provider.resolveWebviewView === 'function' });
+    log.info('View type to register:', 'vysor.chatView');
+    
     const viewDisposable = vscode.window.registerWebviewViewProvider(
       'vysor.chatView', // must match package.json views[].id
       provider,
       { webviewOptions: { retainContextWhenHidden: true } }
     );
+    
+    log.info('=== WEBVIEW VIEW PROVIDER REGISTERED ===');
+    log.info('Disposable object:', { disposableType: typeof viewDisposable, hasDisposeMethod: typeof viewDisposable.dispose === 'function' });
+    
+    log.info('Webview view provider registered successfully');
     context.subscriptions.push(viewDisposable);
 
     // 5) Respond to settings changes (hot apply)
+    log.info('Setting up configuration change watcher...');
     const cfgWatcher = vscode.workspace.onDidChangeConfiguration((e) => {
       if (!e.affectsConfiguration('vysor')) return;
       const updated = ConfigManager.getInstance().getConfig();
@@ -66,10 +94,28 @@ export async function activate(context: vscode.ExtensionContext) {
     }
 
     log.info('Vysor activated successfully.', { logFile: log.getLogFilePath() });
+    
+    // 7) Verify the view is accessible
+    try {
+      const views = vscode.window.visibleTextEditors;
+      log.info('Extension activation completed. Views should now be available.');
+    } catch (err) {
+      log.error('Error during final activation check', err);
+    }
+    
+    // 8) Register test command for debugging
+    const testCommand = vscode.commands.registerCommand('vysor.runPlannerTest', () => {
+      log.info('Test command executed successfully');
+      vscode.window.showInformationMessage('Vysor extension is working! Check the Output panel for logs.');
+    });
+    context.subscriptions.push(testCommand);
+    log.info('Test command registered successfully');
+    
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
+    log.error('Activation failed', err);
     vscode.window.showErrorMessage(`Failed to activate Vysor: ${msg}`);
-    Logger.getInstance().error('Activation failed', err);
+    throw err; // Re-throw to ensure VS Code knows activation failed
   }
 }
 
@@ -90,39 +136,6 @@ function looksLikeUrl(s?: string): boolean {
   }
 }
 
-// import * as vscode from 'vscode';
-// import { Orchestrator } from './core/orchestrator';
-// // import { FileOperationTools } from './tools';
 
-// export function activate(context: vscode.ExtensionContext) {
-//   // Create an orchestrator instance
-//   const orchestrator = new Orchestrator({
-//     plannerBaseUrl: "http://127.0.0.1:8000", // your FastAPI server
-//     maxIterations: 5
-//   });
 
-//   // Register the command
-//   const disposable = vscode.commands.registerCommand('vysor.runPlannerTest', async () => {
-//     const query = await vscode.window.showInputBox({
-//       prompt: 'Enter a test query',
-//       value: 'List all files in a directory called "vysor"'
-//     });
-//     if (!query) return;
 
-//     const outputChannel = vscode.window.createOutputChannel('Vysor Planner Test');
-//     outputChannel.show(true);
-
-//     const result = await orchestrator.processQuery(
-//       { query },
-//       (text, done) => {
-//         outputChannel.appendLine(text);
-//         if (done) outputChannel.appendLine('\n[Done]');
-//       }
-//     );
-
-//     vscode.window.showInformationMessage(`Final result: ${result}`);
-//   });
-
-//   // Add it to disposables so it’s cleaned up on deactivate
-//   context.subscriptions.push(disposable);
-// }

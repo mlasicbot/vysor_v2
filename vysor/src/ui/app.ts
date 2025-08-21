@@ -43,7 +43,7 @@ function render() {
     generating: state.generating,
     mentionOpen: state.mentionOpen,
     mentionItems: state.mentionItems,
-    onDraft: (v, ev) => { state.draft = v; handleMention(ev); },
+    onDraft: (v, ev) => { state.draft = v; handleMention(ev); render(); },
     onKeyDown: (ev) => {
       if ((ev.key === 'Enter') && (ev.ctrlKey || ev.metaKey)) { ev.preventDefault(); submit(); }
       if (state.mentionOpen && (ev.key === ' ' || ev.key === 'Escape')) { ev.preventDefault(); closeMentions(); }

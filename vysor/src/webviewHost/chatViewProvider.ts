@@ -32,21 +32,31 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     private readonly log?: { info: (...a:any[])=>void; error: (...a:any[])=>void }
   ) {}
 
-  // Optional hook used by extension.ts
   notifyConfigChanged(updated: unknown) {
     this.post({ type: 'CFG/UPDATED', payload: updated });
   }
 
   resolveWebviewView(webviewView: vscode.WebviewView) {
+    this.log?.info?.('=== RESOLVE WEBVIEW VIEW CALLED ===');
     this.view = webviewView;
     const { webview } = webviewView;
-    webview.options = { 
-      enableScripts: true, 
-      localResourceRoots: [this.context.extensionUri],
-      portMapping: []
+
+    // Allow scripts and UI folders
+    webview.options = {
+      enableScripts: true,
+      localResourceRoots: [
+        this.context.extensionUri,
+        vscode.Uri.joinPath(this.context.extensionUri, 'out', 'ui'),
+        vscode.Uri.joinPath(this.context.extensionUri, 'media'),
+      ],
+      portMapping: [],
     };
+
     webview.html = this.html(webview);
+
     webview.onDidReceiveMessage((m: WebviewMsg) => this.onMessage(m));
+
+    this.log?.info?.('=== WEBVIEW VIEW RESOLVED SUCCESSFULLY ===');
   }
 
   // ---------- inbound from UI ----------
@@ -85,8 +95,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const context = [previous, ...(blobs || [])].filter(Boolean).join('\n\n');
 
     const trace: string[] = [];
-    const onProgress = (text: string, done: boolean) => {
-      // stream the same text to the UI; your orchestrator already wraps lines with headings
+    const onProgress = (text: string) => {
       this.post({ type:'CHAT/STREAM_DELTA', runId, text });
       this.post({ type:'TRACE/ENTRY', runId, entry: text });
       trace.push(text);
@@ -146,30 +155,37 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private html(webview: vscode.Webview) {
     const nonce = Math.random().toString(36).slice(2);
 
-    // NOTE: your CSS is under ui/styles or ui/components/styles — pick the one you use
     const css = webview.asWebviewUri(
       vscode.Uri.joinPath(this.context.extensionUri, 'out', 'ui', 'styles', 'main.css')
     );
     const js  = webview.asWebviewUri(
-      vscode.Uri.joinPath(this.context.extensionUri, 'out', 'ui', 'app.js')
+      vscode.Uri.joinPath(this.context.extensionUri, 'out', 'ui', 'app.js')   // ← esbuild output
     );
+
+    this.log?.info?.('HTML resources resolved', { css: css.toString(), js: js.toString() });
+
+    const csp = [
+      `default-src 'none'`,
+      `img-src ${webview.cspSource} https: data:`,
+      `style-src ${webview.cspSource} 'unsafe-inline'`,
+      `font-src ${webview.cspSource}`,
+      `script-src 'nonce-${nonce}' ${webview.cspSource}`
+    ].join('; ');
 
     return `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta http-equiv="Content-Security-Policy"
-        content="default-src 'none'; img-src ${webview.cspSource} https: data:;
-                 style-src ${webview.cspSource} 'unsafe-inline';
-                 script-src 'nonce-${nonce}' 'unsafe-eval';">
+  <meta http-equiv="Content-Security-Policy" content="${csp}">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <link rel="stylesheet" href="${css}">
   <title>Vysor</title>
 </head>
 <body>
-  <div id="root"></div>
+  <div id="root">Loading Vysor…</div>
   <script nonce="${nonce}">window.__vscode = acquireVsCodeApi();</script>
-  <script nonce="${nonce}" src="${js}"></script>
+  <!-- IMPORTANT: load bundled ESM -->
+  <script nonce="${nonce}" type="module" src="${js}"></script>
 </body>
 </html>`;
   }
