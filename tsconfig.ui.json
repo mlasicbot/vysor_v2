@@ -1,0 +1,18 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "ESNext",               // ESM for editor type-checking
+    "moduleResolution": "node",
+    "rootDir": "src/ui",
+    "outDir": "out/ui",               // esbuild also writes here; fine to keep for TS tooling
+    "lib": ["ES2020", "DOM"],
+    "sourceMap": true,
+    "strict": true,
+    "isolatedModules": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "noEmitOnError": false
+  },
+  "include": ["src/ui/**/*.ts"],
+  "exclude": ["node_modules", "out", "**/*.js"]
+}

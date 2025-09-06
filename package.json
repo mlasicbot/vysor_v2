@@ -1,0 +1,136 @@
+{
+  "name": "vysor",
+  "displayName": "Vysor",
+  "description": "Coding assistant for the hardware industry",
+  "version": "0.0.1",
+  "icon": "media/vysor-icon.svg",
+  "engines": {
+    "vscode": "^1.102.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished",
+    "onView:vysor.chatView"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "vysor",
+          "title": "Vysor",
+          "icon": "media/vysor-icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "vysor": [
+        {
+          "id": "vysor.chatView",
+          "name": "Vysor Chat",
+          "type": "webview",
+          "icon": "media/vysor-icon.svg"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Vysor",
+      "properties": {
+        "vysor.plannerBaseUrl": {
+          "type": "string",
+          "default": "http://localhost:8000",
+          "description": "Base URL for the planner backend"
+        },
+        "vysor.maxIterations": {
+          "type": "number",
+          "default": 50,
+          "description": "Maximum think/plan/execute cycles per query"
+        },
+        "vysor.requestTimeoutMs": {
+          "type": "number",
+          "default": 30000,
+          "description": "HTTP request timeout for planner calls (in ms)"
+        },
+        "vysor.modelName": {
+          "type": "string",
+          "default": "default-model",
+          "description": "Planner model name to use"
+        },
+        "vysor.showProgressInChat": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show intermediate planner progress messages in chat"
+        },
+        "vysor.autoScrollChat": {
+          "type": "boolean",
+          "default": true,
+          "description": "Auto-scroll chat to bottom when new messages arrive"
+        },
+        "vysor.hdlDefaultLanguage": {
+          "type": "string",
+          "enum": [
+            "verilog",
+            "vhdl",
+            "systemverilog"
+          ],
+          "default": "verilog",
+          "description": "Default HDL language for code generation"
+        },
+        "vysor.generateTestbench": {
+          "type": "boolean",
+          "default": false,
+          "description": "Automatically generate a testbench for HDL modules"
+        },
+        "vysor.simulationTool": {
+          "type": "string",
+          "default": "iverilog",
+          "description": "Preferred simulation tool for HDL"
+        },
+        "vysor.allowFileWrites": {
+          "type": "boolean",
+          "default": true,
+          "description": "Allow Vysor to write files in the workspace"
+        },
+        "vysor.workspaceRootOnly": {
+          "type": "boolean",
+          "default": true,
+          "description": "Restrict file operations to the workspace root folder"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run build",
+    "build": "npm run build:ext && npm run build:ui",
+    "build:ext": "tsc -p tsconfig.json",
+    "build:ui": "node ./esbuild.ui.mjs && npm run copy:ui",
+    "copy:ui": "cpx \"src/ui/styles/**/*\" out/ui/styles && cpx \"media/**/*\" out/media",
+    "watch": "npm-run-all --parallel watch:ext watch:ui",
+    "watch:ext": "tsc -w -p tsconfig.json",
+    "watch:ui": "node ./esbuild.ui.mjs --watch & cpx \"src/ui/styles/**/*\" out/ui/styles -w & cpx \"media/**/*\" out/media -w",
+    "pretest": "npm run build && npm run lint",
+    "lint": "eslint src",
+    "test": "vscode-test"
+  },
+  "devDependencies": {
+    "@types/axios": "^0.9.36",
+    "@types/mocha": "^10.0.10",
+    "@types/node": "^20.19.11",
+    "@types/vscode": "^1.102.0",
+    "@typescript-eslint/eslint-plugin": "^8.39.0",
+    "@typescript-eslint/parser": "^8.39.0",
+    "@vscode/test-cli": "^0.0.11",
+    "@vscode/test-electron": "^2.5.2",
+    "cpx": "^1.5.0",
+    "esbuild": "^0.23.1",
+    "eslint": "^9.32.0",
+    "npm-run-all": "^4.1.5",
+    "typescript": "^5.9.2"
+  },
+  "dependencies": {
+    "axios": "^1.11.0"
+  }
+}

@@ -1,0 +1,70 @@
+<!-- media/vysor-icon.svg -->
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-labelledby="title desc">
+  <title id="title">Vysor</title>
+  <desc id="desc">Stylized V logo with PCB traces for a hardware coding assistant</desc>
+
+  <defs>
+    <!-- Background gradient -->
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0d1b2a"/>
+      <stop offset="100%" stop-color="#1b263b"/>
+    </linearGradient>
+
+    <!-- Accent gradient for the V & pads -->
+    <linearGradient id="acc" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#00e0b8"/>
+      <stop offset="100%" stop-color="#62fff7"/>
+    </linearGradient>
+
+    <!-- Soft inner shadow / vignette -->
+    <radialGradient id="vignette" cx="50%" cy="50%" r="70%">
+      <stop offset="70%" stop-color="#0000"/>
+      <stop offset="100%" stop-color="#0008"/>
+    </radialGradient>
+  </defs>
+
+  <!-- Rounded background -->
+  <rect x="8" y="8" width="240" height="240" rx="28" fill="url(#bg)"/>
+  <!-- Subtle border -->
+  <rect x="8.5" y="8.5" width="239" height="239" rx="27.5" fill="none" stroke="#ffffff20" stroke-width="1"/>
+
+  <!-- Light grid (very subtle) -->
+  <g stroke="#ffffff10" stroke-width="1">
+    <path d="M32 64H224M32 96H224M32 128H224M32 160H224M32 192H224"/>
+    <path d="M64 32V224M96 32V224M128 32V224M160 32V224M192 32V224"/>
+  </g>
+
+  <!-- PCB-style traces connecting to the V -->
+  <g stroke="url(#acc)" stroke-width="6" stroke-linecap="round" opacity="0.85">
+    <path d="M28 110H86"/>   <!-- left trace -->
+    <path d="M228 110H170"/> <!-- right trace -->
+    <path d="M128 228V188"/> <!-- bottom trace -->
+  </g>
+
+  <!-- Pads at the ends of the traces -->
+  <g fill="url(#acc)" opacity="0.95">
+    <circle cx="28" cy="110" r="6"/>
+    <circle cx="228" cy="110" r="6"/>
+    <circle cx="128" cy="228" r="6"/>
+  </g>
+
+  <!-- The stylized 'V' -->
+  <path
+    d="M64 64 L128 180 L192 64"
+    fill="none"
+    stroke="url(#acc)"
+    stroke-width="14"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+
+  <!-- End pads for the V -->
+  <g fill="url(#acc)">
+    <circle cx="64" cy="64" r="10"/>
+    <circle cx="192" cy="64" r="10"/>
+    <circle cx="128" cy="180" r="10"/>
+  </g>
+
+  <!-- Soft vignette overlay -->
+  <rect x="8" y="8" width="240" height="240" rx="28" fill="url(#vignette)"/>
+</svg>
