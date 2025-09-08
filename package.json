@@ -51,9 +51,11 @@
         },
         "vysor.requestTimeoutMs": {
           "type": "number",
-          "default": 30000,
+          "default": 120000,
           "description": "HTTP request timeout for planner calls (in ms)"
         },
+        "vysor.networkRetries":  { "type": "number", "default": 1, "description": "Automatic retries for planner HTTP calls." },
+        "vysor.networkRetryBackoffMs": { "type": "number", "default": 1500, "description": "Backoff between retries (ms)." },
         "vysor.modelName": {
           "type": "string",
           "default": "default-model",

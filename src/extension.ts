@@ -36,6 +36,8 @@ export async function activate(context: vscode.ExtensionContext) {
       maxIterations: cfg.maxIterations,
       requestTimeoutMs: cfg.requestTimeoutMs,
       modelName: cfg.modelName,
+      networkRetries: (cfg as any).networkRetries,
+      networkRetryBackoffMs: (cfg as any).networkRetryBackoffMs
     });
     log.info('Orchestrator built successfully');
 
@@ -79,6 +81,8 @@ export async function activate(context: vscode.ExtensionContext) {
         maxIterations: updated.maxIterations,
         requestTimeoutMs: updated.requestTimeoutMs,
         modelName: updated.modelName,
+        networkRetries: (updated as any).networkRetries,
+        networkRetryBackoffMs: (updated as any).networkRetryBackoffMs,
       });
 
       // Optional: notify the webview so it can show a toast / update UI

@@ -25,7 +25,7 @@ export type ExtensionInbound =
   | { type: 'CHAT/ERROR'; runId?: string; message: string }
   | { type: 'MENTION/RESULTS'; items: MentionItem[] }
   | { type: 'MENTION/DIR_CONTENTS'; base: string; items: MentionItem[] }
-  | { type: 'MENTION/FILE_CONTENT'; path: string; content: string }
+  | { type: 'MENTION/FILE_CONTENT'; path: string; content: string; mime?: string }
   | { type: 'UPLOAD/START'; fileName: string; sessionId: string }
   | { type: 'UPLOAD/SUCCESS'; fileName: string; sessionId: string }
   | { type: 'UPLOAD/ERROR'; fileName: string; sessionId: string; message: string };

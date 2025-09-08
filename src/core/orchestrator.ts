@@ -9,15 +9,28 @@ export interface OrchestratorConfig {
   maxIterations: number;
   requestTimeoutMs?: number;
   modelName?: string;
+  networkRetries?: number;
+  networkRetryBackoffMs?: number;
 }
+
+// export interface QueryRequest {
+//   query: string;
+//   context?: string;
+//   maxIterations?: number;
+// }
 
 export interface QueryRequest {
   query: string;
   context?: string;
   maxIterations?: number;
+  hopIndex?: number; // optional, UI may pass it; we’ll auto-number if absent
 }
 
-export type ProgressCallback = (text: string, done: boolean) => void;
+let GLOBAL_HOP_COUNTER = 0;
+
+// export type ProgressCallback = (text: string, done: boolean) => void;
+export type ProgressCallback = (text: string, done?: boolean) => void;
+
 
 export class Orchestrator {
   private isGenerating = false;
@@ -64,7 +77,9 @@ export class Orchestrator {
       deps?.planner ??
       new PlannerClient({
         baseUrl: config.plannerBaseUrl,
-        timeoutMs: config.requestTimeoutMs ?? 30_000,
+        timeoutMs: config.requestTimeoutMs ?? 120_000,
+        retries: config.networkRetries ?? 1,
+        retryBackoffMs: config.networkRetryBackoffMs ?? 1500,
         modelName: config.modelName,
       });
 
@@ -84,8 +99,15 @@ export class Orchestrator {
     this.abortController = new AbortController();
 
     const iterations = req.maxIterations ?? this.maxIterations;
-    let trajectory = await this.composeHeader(req.context, req.query);
+
+    // Build hop-scoped, reconstructable header
+    let trajectory = await this.composeHeader(req.context, req.query, req.hopIndex ?? 1);
+
+    // (Optional but handy) show it once in the trace
+    onProgress?.(this.pretty('Hop Context', trajectory), false);
     let finalResponse = '';
+
+    let consecutiveTimeouts = 0;
 
     try {
       for (let i = 0; i < iterations; i++) {
@@ -98,12 +120,21 @@ export class Orchestrator {
           thought = String(think.output ?? '');
           onProgress?.(this.pretty(`Thought #${i + 1}`, thought), false);
         } catch (e) {
+          if (/(timed out)/i.test(String(e))) consecutiveTimeouts++;
+
           const errText = this.stepError('Think', e);
           onProgress?.(errText, false);
           // Append error to trajectory so planner can react in the next iteration
           trajectory = this.appendIterationBlock(trajectory, '(error in think)', '(skipped)', {}, errText);
           // Continue to next iteration to let planner recover
-          continue;
+          // continue;
+          if (consecutiveTimeouts >= 2) {
+            finalResponse = 'Planner timed out repeatedly. Increase "vysor.requestTimeoutMs" (e.g., 120000) or try a smaller step.';
+            onProgress?.(this.pretty('Final', finalResponse), true);
+            return finalResponse;
+          } else {
+            continue;
+          }
         }
 
         this.ensureNotCancelled();
@@ -182,7 +213,13 @@ export class Orchestrator {
       return finalResponse;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      // Do NOT swallow silently — report as final line but keep consistent format
+      const isAbort = /AbortError|cancelled|canceled/i.test(msg);
+      if (isAbort) {
+        // Announce a friendly stop in the trace, then let caller handle revert
+        onProgress?.(`## Stopped\nUser requested stop.`);
+        throw err instanceof Error ? err : new Error('Request cancelled');
+      }
+      // Non-cancel errors: surface as a final formatted line
       onProgress?.(this.stepError('Unhandled', msg), true);
       return `Error: ${msg}`;
     } finally {
@@ -195,34 +232,149 @@ export class Orchestrator {
     this.currentCfg = { ...this.currentCfg, ...partial };
     if (typeof partial.maxIterations === 'number') this.maxIterations = partial.maxIterations;
 
-    if (partial.plannerBaseUrl !== undefined || partial.requestTimeoutMs !== undefined || partial.modelName !== undefined) {
+    if (
+      partial.plannerBaseUrl !== undefined ||
+      partial.requestTimeoutMs !== undefined ||
+      partial.modelName !== undefined ||
+      partial.networkRetries !== undefined ||
+      partial.networkRetryBackoffMs !== undefined
+    ){
       this.planner = new PlannerClient({
         baseUrl: this.currentCfg.plannerBaseUrl,
-        timeoutMs: this.currentCfg.requestTimeoutMs ?? 30_000,
+        timeoutMs: this.currentCfg.requestTimeoutMs ?? 120_000,
         modelName: this.currentCfg.modelName,
+        retries: this.currentCfg.networkRetries ?? 1,
+        retryBackoffMs: this.currentCfg.networkRetryBackoffMs ?? 1500, 
       });
     }
   }
 
   // ---- Trajectory formatting ----
+  // replace composeHeader with this version
 
-  private async composeHeader(context: string | undefined, query: string): Promise<string> {
-    const lines: string[] = [];
-    
-    // Always generate directory structure as context
-    try {
-      const workspacePath = this.fileTools.getWorkspacePath();
-      const dirStructure = await this.fileTools.generateDirectoryStructure(workspacePath);
-      // lines.push(`Directory Structure:\n\`\`\`markdown\n${dirStructure}\n\`\`\``);
-      lines.push(`Directory Structure:\n${dirStructure}`);
-    } catch (error) {
-      lines.push(`Directory Structure: Error generating - ${error}`);
-    }
-    
-    if (context && context.trim().length > 0) lines.push(`Additional Context: ${context.trim()}`);
-    lines.push(`Query: ${query.trim()}`, '');
-    return lines.join('\n');
+  private composeHeader(context: string | undefined, query: string): Promise<string>;
+  private composeHeader(context: string | undefined, query: string, hopIndex: number): Promise<string>;
+
+
+  private async composeHeader(
+  context: string | undefined,
+  query: string,
+  hopIndex = 1
+): Promise<string> {
+
+  const hopNo = ++GLOBAL_HOP_COUNTER;
+
+  // Directory structure
+  let workspaceDir = '';
+  try {
+    const ws = this.fileTools.getWorkspacePath();
+    workspaceDir = (await this.fileTools.generateDirectoryStructure(ws)).trimEnd();
+  } catch (e) {
+    workspaceDir = `<<error generating workspace tree: ${String(e)}>>`;
   }
+
+  const ctx = (context || '').trim();
+
+  // If caller already wrapped context with CONTEXT:* blocks, don’t re-wrap.
+  // Otherwise, wrap raw typed DOC/CODE into CONTEXT:MISC (as tests expect).
+  const hasContextBlocks = /<<<CONTEXT:(DIR|MISC)\b/.test(ctx);
+  const miscWrapped = ctx
+    ? (hasContextBlocks ? ctx : `<<<CONTEXT:MISC>>>\n${ctx}\n<<<END CONTEXT:MISC>>>`)
+    : '';
+
+  return [
+    `<<<HOP #${hopNo}>>>`,
+    `<<<QUERY>>>${query.trim()}<<<END QUERY>>>`,
+    `<<<CONTEXT:DIR name="workspace">>`,
+    workspaceDir,
+    `<<<END CONTEXT:DIR>>>`,
+    miscWrapped,
+    `<<<END HOP>>>`,
+    ''
+  ].join('\n');
+}
+
+
+  // private async composeHeader(context: string | undefined, query: string): Promise<string> {
+  //   const lines: string[] = [];
+    
+  //   // Always generate directory structure as context
+  //   try {
+  //     const workspacePath = this.fileTools.getWorkspacePath();
+  //     const dirStructure = await this.fileTools.generateDirectoryStructure(workspacePath);
+  //     // lines.push(`Directory Structure:\n\`\`\`markdown\n${dirStructure}\n\`\`\``);
+  //     lines.push(`Directory Structure:\n${dirStructure}`);
+  //   } catch (error) {
+  //     lines.push(`Directory Structure: Error generating - ${error}`);
+  //   }
+    
+  //   if (context && context.trim().length > 0) lines.push(`Additional Context: ${context.trim()}`);
+  //   lines.push(`Query: ${query.trim()}`, '');
+  //   return lines.join('\n');
+  // }
+//   private async composeHeader(context: string | undefined, query: string, hopIndex = 1): Promise<string> {
+
+//   const hopNo = ++GLOBAL_HOP_COUNTER;
+//   let workspaceDir = '';
+//   try {
+//       const ws = this.fileTools.getWorkspacePath();
+//       workspaceDir = await this.fileTools.generateDirectoryStructure(ws);
+//     } catch (e) {
+//       workspaceDir = `<<error generating workspace tree: ${String(e)}>>`;
+//     }
+//   const ctx = (context || '').trim();
+//   return [
+//     `<<<HOP #${hopNo}>>>`,
+//     `<<<QUERY>>>${query.trim()}<<<END QUERY>>>`,
+//     `<<<CONTEXT:DIR name="workspace">>`,
+//     workspaceDir.trim(),
+//     `<<<END CONTEXT:DIR>>>`,
+//     ctx ? `<<<CONTEXT:MISC>>>\n${ctx}\n<<<END CONTEXT:MISC>>>` : '',
+//     `<<<END HOP>>>`,
+//     ''
+//   ].filter(Boolean).join('\n');
+// }
+
+  // const lines: string[] = [];
+  // const runTs = new Date().toISOString();
+
+  
+
+  // // Directory structure (server-authoritative)
+  // let dirStr = '';
+  // try {
+  //   const workspacePath = this.fileTools.getWorkspacePath();
+  //   dirStr = await this.fileTools.generateDirectoryStructure(workspacePath);
+  // } catch (error:any) {
+  //   dirStr = `Error generating directory structure: ${String(error?.message || error)}`;
+  // }
+
+  // // If the incoming context already contains typed blocks (DOC/CODE), keep them as-is.
+  // const hasTypedBlocks = typeof context === 'string' && /<<<(DOC|CODE|CONTEXT:(DIR|MISC))\b/.test(context);
+  // const miscWrapped = !context ? '' : [
+  //   `<<<CONTEXT:MISC>>>`,
+  //   context,
+  //   `<<<END CONTEXT:MISC>>>`
+  // ].join('\n');
+
+  // lines.push(
+  //   `<<<HOP n=${hopIndex} ts="${runTs}">>>`,
+  //   `<<<QUERY>>>`,
+  //   query.trim(),
+  //   `<<<END QUERY>>>`,
+  //   `<<<CONTEXT:DIR>>>`,
+  //   dirStr.trim(),
+  //   `<<<END CONTEXT:DIR>>>`,
+  //   hasTypedBlocks ? (context || '') : miscWrapped,
+  //   `<<<RESPONSE>>>`,           // model fills this conceptually; we also stream "Final" separately
+  //   `<<<END RESPONSE>>>`,
+  //   `<<<END HOP>>>`,
+  //   '' // newline for safety
+  // );
+
+  // return lines.join('\n');
+// }
+
 
   private appendIterationBlock(
     trajectory: string,
@@ -267,8 +419,19 @@ export class Orchestrator {
     return `## ${title}\n${text}`;
   }
 
+  // private stepError(stage: string, err: unknown): string {
+  //   const msg = err instanceof Error ? err.message : String(err);
+  //   return `## ${stage} Error\n${msg}`;
+  // }
   private stepError(stage: string, err: unknown): string {
-    const msg = err instanceof Error ? err.message : String(err);
-    return `## ${stage} Error\n${msg}`;
+  const msg = err instanceof Error ? err.message : String(err);
+  // normalize a couple of common cases
+  if (/timed out/i.test(msg)) {
+    return `## ${stage} Timeout\nPlanner call exceeded timeout. You can increase "vysor.requestTimeoutMs" in Settings or try again.`;
+  }
+  if (/cancelled by user/i.test(msg)) {
+    return `## ${stage}\nStopped by user.`;
+  }
+  return `## ${stage} Error\n${msg}`;
   }
 }

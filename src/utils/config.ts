@@ -9,6 +9,8 @@ export interface VysorConfig {
   maxIterations: number;
   requestTimeoutMs: number;
   modelName: string;
+  networkRetries: number;
+  networkRetryBackoffMs: number;
 
   // UI
   showProgressInChat: boolean;
@@ -43,8 +45,10 @@ export class ConfigManager {
       // Planner / AI
       plannerBaseUrl: c.get<string>('plannerBaseUrl', 'http://localhost:8000'),
       maxIterations: c.get<number>('maxIterations', 50),
-      requestTimeoutMs: c.get<number>('requestTimeoutMs', 30000),
+      requestTimeoutMs: c.get<number>('requestTimeoutMs', 120000),
       modelName: c.get<string>('modelName', 'default-model'),
+      networkRetries: c.get<number>('networkRetries', 1),
+      networkRetryBackoffMs: c.get<number>('networkRetryBackoffMs', 1500),
 
       // UI
       showProgressInChat: c.get<boolean>('showProgressInChat', true),

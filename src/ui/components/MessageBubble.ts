@@ -33,45 +33,141 @@ export class MessageBubble extends Component<MessageBubbleProps> {
 
     const body = document.createElement('div');
     body.className = 'body';
+
+    if (role === 'assistant' && trace?.length) {
+  if (!this.traceExpanded) {
+    const { thought, tool } = this.summarizeLive(trace);
+    const exec = this.lastBlock(trace, 'Execution Result');
+
+    const wrap = document.createElement('div');
+    if (thought) {
+      const t = document.createElement('div');
+      t.className = 'step-text';
+      t.textContent = `Thought: ${thought}`;
+      wrap.appendChild(t);
+    }
+    if (tool) {
+      const t = document.createElement('div');
+      t.className = 'step-text';
+      t.textContent = `Selected Tool: ${tool}`;
+      wrap.appendChild(t);
+    }
+    if (exec) {
+      const t = document.createElement('div');
+      t.className = 'step-text';
+      t.textContent = `Result: ${this.truncate(exec, 220)}`;
+      wrap.appendChild(t);
+    }
+    if (!thought && !tool && !exec) wrap.textContent = text || '…';
+    body.appendChild(wrap);
+  } else {
+    // expanded: keep your existing grouping; it already shows Tool Args etc.
+    const groups = this.groupByIteration(trace);
+    const ul = document.createElement('ul');
+    for (const g of groups) {
+      const li = document.createElement('li');
+      li.innerHTML = `<strong>Hop ${g.idx || groups.indexOf(g)+1}</strong>`;
+      const sub = document.createElement('ul');
+      for (const line of g.lines) {
+        const s = document.createElement('li');
+        s.textContent = line;
+        sub.appendChild(s);
+      }
+      li.appendChild(sub);
+      ul.appendChild(li);
+    }
+    body.appendChild(ul);
+  }
+
+  
+}
+
     
     // For assistant messages, show only the final answer by default
-    if (role === 'assistant' && trace?.length) {
-      // Extract the final answer (last line that doesn't start with ##)
-      const finalAnswer = this.extractFinalAnswer(text, trace);
-      body.textContent = finalAnswer;
+    // if (role === 'assistant' && trace?.length) {
+    //   // Extract the final answer (last line that doesn't start with ##)
+    //   const finalAnswer = this.extractFinalAnswer(text, trace);
+    //   body.textContent = finalAnswer;
       
-      // Add expandable trace section
-      const traceSection = document.createElement('div');
-      traceSection.className = 'trace-section';
+    //   // Add expandable trace section
+    //   const traceSection = document.createElement('div');
+    //   traceSection.className = 'trace-section';
       
-      const expandButton = document.createElement('button');
-      expandButton.className = 'btn ghost expand-btn';
-      expandButton.type = 'button';
-      expandButton.textContent = this.traceExpanded ? 'Hide Details' : 'Show Details';
-      expandButton.addEventListener('click', () => {
-        this.traceExpanded = !this.traceExpanded;
-        this.render();
-      });
+    //   const expandButton = document.createElement('button');
+    //   expandButton.className = 'btn ghost expand-btn';
+    //   expandButton.type = 'button';
+    //   expandButton.textContent = this.traceExpanded ? 'Hide Details' : 'Show Details';
+    //   expandButton.addEventListener('click', () => {
+    //     this.traceExpanded = !this.traceExpanded;
+    //     this.render();
+    //   });
       
-      traceSection.appendChild(expandButton);
+    //   traceSection.appendChild(expandButton);
       
-      if (this.traceExpanded) {
-        const traceContent = document.createElement('div');
-        traceContent.className = 'trace-content';
+    //   if (this.traceExpanded) {
+    //     const traceContent = document.createElement('div');
+    //     traceContent.className = 'trace-content';
         
-        // Show the full trace with proper formatting
-        const fullTrace = this.formatTrace(text, trace);
-        traceContent.innerHTML = fullTrace;
+    //     // Show the full trace with proper formatting
+    //     const fullTrace = this.formatTrace(text, trace);
+    //     traceContent.innerHTML = fullTrace;
         
-        traceSection.appendChild(traceContent);
-      }
+    //     traceSection.appendChild(traceContent);
+    //   }
       
-      this.el.appendChild(traceSection);
-    } else {
-      body.textContent = text;
-    }
+    //   this.el.appendChild(traceSection);
+    // } else {
+    //   body.textContent = text;
+    // }
+//     if (role === 'assistant' && trace?.length) {
+//   if (!this.traceExpanded) {
+//     const { thought, tool } = this.summarizeLive(trace);
+//     const wrap = document.createElement('div');
+//     if (thought) {
+//       const t = document.createElement('div');
+//       t.className = 'step-text';
+//       t.textContent = `Thought: ${thought}`;
+//       wrap.appendChild(t);
+//     }
+//     if (tool) {
+//       const t = document.createElement('div');
+//       t.className = 'step-text';
+//       t.textContent = `Selected Tool: ${tool}`;
+//       wrap.appendChild(t);
+//     }
+//     if (!thought && !tool) wrap.textContent = text || '…';
+//     body.appendChild(wrap);
+//   } else {
+//     // Expanded: grouped by iteration with bullets
+//     const groups = this.groupByIteration(trace);
+//     const ul = document.createElement('ul');
+//     for (const g of groups) {
+//       const li = document.createElement('li');
+//       li.innerHTML = `<strong>Hop ${g.idx || groups.indexOf(g)+1}</strong>`;
+//       const sub = document.createElement('ul');
+//       for (const line of g.lines) {
+//         const s = document.createElement('li');
+//         s.textContent = line;
+//         sub.appendChild(s);
+//       }
+//       li.appendChild(sub);
+//       ul.appendChild(li);
+//     }
+//     body.appendChild(ul);
+//   }
+// }
+
     
     this.el.appendChild(body);
+
+    if (role === 'assistant' && (trace?.length ?? 0) > 0) {
+      const toggle = document.createElement('button');
+      toggle.className = 'btn ghost expand-btn';
+      toggle.textContent = this.traceExpanded ? 'Hide details' : 'Show details';
+      toggle.onclick = () => { this.traceExpanded = !this.traceExpanded; this.render(); };
+      this.el.appendChild(toggle);
+    }
+
 
     // Add generating indicator for assistant messages
     if (role === 'assistant' && generating) {
@@ -203,21 +299,99 @@ export class MessageBubble extends Component<MessageBubbleProps> {
     return finalAnswer || 'Response generated successfully.';
   }
 
+  // private formatTrace(text: string, trace: string[]): string {
+  //   // Format the trace with proper markdown-like styling
+  //   const fullContent = [text, ...trace].join('\n');
+  //   const lines = fullContent.split('\n');
+    
+  //   return lines.map(line => {
+  //     if (line.startsWith('##')) {
+  //       return `<div class="trace-header">${line}</div>`;
+  //     } else if (line.trim()) {
+  //       return `<div class="trace-line">${line}</div>`;
+  //     } else {
+  //       return '<br>';
+  //     }
+  //   }).join('');
+  // }
   private formatTrace(text: string, trace: string[]): string {
-    // Format the trace with proper markdown-like styling
+    const esc = (s: string) =>
+      s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     const fullContent = [text, ...trace].join('\n');
     const lines = fullContent.split('\n');
-    
     return lines.map(line => {
       if (line.startsWith('##')) {
-        return `<div class="trace-header">${line}</div>`;
+        return `<div class="trace-header">${esc(line)}</div>`;
       } else if (line.trim()) {
-        return `<div class="trace-line">${line}</div>`;
+        return `<div class="trace-line">${esc(line)}</div>`;
       } else {
         return '<br>';
       }
     }).join('');
   }
+
+  // --- add these helpers inside MessageBubble class ---
+  private summarizeLive(trace?: string[]): { thought?: string; tool?: string } {
+    if (!trace?.length) return {};
+    // scan from the end to get the latest
+    let thought: string | undefined;
+    let tool: string | undefined;
+    for (let i = trace.length - 1; i >= 0; i--) {
+      const line = trace[i];
+      if (!tool && /^##\s*Selected Tool/i.test(line)) {
+        // next non-empty line is the tool name (often on same or next line)
+        const next = trace[i + 1]?.trim();
+        tool = (next && !next.startsWith('##')) ? next : line.replace(/^##\s*Selected Tool\s*/i, '').trim();
+      }
+      if (!thought && /^##\s*Thought/i.test(line)) {
+        // take the next non-header line for brevity
+        const next = trace[i + 1]?.trim();
+        thought = (next && !next.startsWith('##')) ? next : line.replace(/^##\s*Thought.*?/i, '').trim();
+      }
+      if (thought && tool) break;
+    }
+    return { thought, tool };
+  }
+
+  private groupByIteration(trace: string[]): Array<{ idx: number; lines: string[] }> {
+    // Split on "## Thought #k" markers to form iterations
+    const groups: Array<{ idx: number; lines: string[] }> = [];
+    let cur: { idx: number; lines: string[] } | null = null;
+    for (const ln of trace) {
+      const m = ln.match(/^##\s*Thought\s*#(\d+)/i);
+      if (m) {
+        cur && groups.push(cur);
+        cur = { idx: parseInt(m[1], 10), lines: [ln] };
+      } else {
+        (cur ??= { idx: 0, lines: [] }).lines.push(ln);
+      }
+    }
+    cur && groups.push(cur);
+    return groups;
+  }
+
+  private lastBlock(trace: string[], header: string): string | undefined {
+  // Find the last "## <header>" then collect the following non-header lines
+  for (let i = trace.length - 1; i >= 0; i--) {
+    const line = trace[i];
+    if (line.startsWith(`## ${header}`)) {
+      const lines: string[] = [];
+      for (let j = i + 1; j < trace.length; j++) {
+        const ln = trace[j];
+        if (ln.startsWith('## ')) break;
+        lines.push(ln);
+      }
+      return lines.join('\n').trim();
+    }
+  }
+  return undefined;
+}
+
+private truncate(s: string, n: number) {
+  return s.length <= n ? s : s.slice(0, n - 1) + '…';
+}
+
+
 }
 
 /** Fallback copy using a temporary textarea (for older webview runtimes) */
@@ -232,3 +406,5 @@ function fallbackCopy(text: string): void {
   try { document.execCommand('copy'); } catch { /* ignore */ }
   document.body.removeChild(ta);
 }
+
+

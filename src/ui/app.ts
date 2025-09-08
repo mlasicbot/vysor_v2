@@ -39,7 +39,7 @@ function render() {
   if (sess) {
     sess.turns.forEach((t, i) => {
       items.push({ role: 'user',      label: 'User', text: t.q });
-      items.push({ role: 'assistant', label: 'Vysor', text: t.r, trace: (t.trace || []).map(stringify) });
+      items.push({ role: 'assistant', label: 'Vysor', text: t.r, trace: (t.trace || []).map(redactedString) });
     });
   }
   if (state.generating) {
@@ -183,6 +183,7 @@ onMessage((msg: ExtensionInbound) => {
       state.liveTrace = [];
       // Don't call render() here - let updateMessageList handle it
       updateMessageList();
+      updateComposerOnly();
       break;
 
     case 'CHAT/STREAM_DELTA':
@@ -190,13 +191,22 @@ onMessage((msg: ExtensionInbound) => {
       state.liveText += msg.text;
       // Only update the message list, not the entire UI
       updateMessageList();
+      updateComposerOnly();
       break;
 
-    case 'TRACE/ENTRY':
-      state.liveTrace.push(stringify(msg.entry));
-      // Only update the message list, not the entire UI
-      updateMessageList();
-      break;
+    // case 'TRACE/ENTRY':
+    //   state.liveTrace.push(stringify(msg.entry));
+    //   // Only update the message list, not the entire UI
+    //   updateMessageList();
+    //   break;
+
+    case 'TRACE/ENTRY': {
+  const s = typeof msg.entry === 'string' ? msg.entry : stringify(msg.entry);
+  state.liveTrace.push(redactTypedBlocks(s));
+  updateMessageList();
+  break;
+}
+
 
     case 'TOOL/EVENT':
       state.liveTrace.push(stringify({ TOOL: msg.evt }));
@@ -211,6 +221,7 @@ onMessage((msg: ExtensionInbound) => {
       state.liveText = '';
       state.liveTrace = [];
       // Ask for latest history so the newly persisted turn is shown
+      updateComposerOnly();
       send({ type: 'UI/READY' });
       break;
 
@@ -227,12 +238,60 @@ onMessage((msg: ExtensionInbound) => {
       render();
       break;
 
-    case 'MENTION/FILE_CONTENT':
-      state.contextBlobs.push(`FILE: ${msg.path}\n\n${msg.content}`);
-      closeMentions();
-      break;
+    // case 'MENTION/FILE_CONTENT':
+    //   state.contextBlobs.push(`FILE: ${msg.path}\n\n${msg.content}`);
+    //   closeMentions();
+    //   break;
+    case 'MENTION/FILE_CONTENT': {
+  const path = msg.path || 'unknown';
+  const content = msg.content || '';
+
+  if (/<<<\s*(DOC|CODE)\b/.test(content)) {
+    // Already typed; pass through as-is
+    state.contextBlobs.push(content);
+  } else if (path.startsWith('ATTACH:')) {
+    const name = path.slice(7);
+    const mime = msg.mime || 'application/octet-stream';
+    state.contextBlobs.push(
+      `<<<DOC name="${name.replace(/"/g,'\\"')}" mime="${mime}">>\n${content}\n<<<END DOC>>>`
+    );
+    // const name = path.replace(/^ATTACH:/, '');
+    // state.contextBlobs.push(
+    //   `<<<DOC name="${name.replace(/"/g,'\\"')}" mime="text/markdown">>\n${content}\n<<<END DOC>>>`
+    // );
+  } else {
+    const lang = guessLang(path);
+    state.contextBlobs.push(
+      `<<<CODE path="${path}" lang="${lang}">>\n${content}\n<<<END CODE>>>`
+    );
+  }
+  closeMentions();
+  break;
+}
+
   }
 });
+
+function redactTypedBlocks(input: string): string {
+  if (typeof input !== 'string') return input as unknown as string;
+  // Collapse DOC blocks
+  let s = input.replace(
+    /<<<DOC\b([^>]*)>>>[\s\S]*?<<<END DOC>>>/g,
+    (_m, attrs) => `<<<DOC${attrs}>>>\n[omitted]\n<<<END DOC>>>`
+  );
+  // Collapse CODE blocks
+  s = s.replace(
+    /<<<CODE\b([^>]*)>>>[\s\S]*?<<<END CODE>>>/g,
+    (_m, attrs) => `<<<CODE${attrs}>>>\n[omitted]\n<<<END CODE>>>`
+  );
+  return s;
+}
+
+function redactedString(x: unknown): string {
+  const s = typeof x === 'string' ? x : stringify(x);
+  return redactTypedBlocks(s);
+}
+
 
 /** Update only the message list without full re-render */
 function updateMessageList() {
@@ -242,7 +301,7 @@ function updateMessageList() {
     if (sess) {
       sess.turns.forEach((t, i) => {
         items.push({ role: 'user',      label: 'User', text: t.q });
-        items.push({ role: 'assistant', label: 'Vysor', text: t.r, trace: (t.trace || []).map(stringify) });
+        items.push({ role: 'assistant', label: 'Vysor', text: t.r, trace: (t.trace || []).map(redactedString) });
       });
     }
     if (state.generating) {
@@ -303,6 +362,22 @@ function updateComposerOnly() {
     });
   }
 }
+
+function guessLang(p: string): string {
+  const n = p.toLowerCase();
+  if (/\.(svh|sv)$/.test(n)) return 'sv';
+  if (/\.vhdl?$/.test(n)) return 'vhdl';
+  if (/\.v$/.test(n)) return 'verilog';
+  if (/\.c$/.test(n)) return 'c';
+  if (/\.cpp$/.test(n)) return 'cpp';
+  if (/\.py$/.test(n)) return 'python';
+  if (/\.md$/.test(n)) return 'markdown';
+  if (/\.json$/.test(n)) return 'json';
+  if (/\.yaml$|\.yml$/.test(n)) return 'yaml';
+  if (/\.tcl$/.test(n)) return 'tcl';
+  return 'text';
+}
+
 
 // boot
 send({ type:'UI/READY' });

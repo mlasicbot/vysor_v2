@@ -100,37 +100,99 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   // ---------- chat run ----------
-  private async runChat(sessionId: string, prompt: string, blobs: string[], titleHint: string) {
-    const runId = this.id();
-    this.post({ type: 'CHAT/STREAM_START', runId, sessionId });
+  // private async runChat(sessionId: string, prompt: string, blobs: string[], titleHint: string) {
+  //   const runId = this.id();
+  //   this.post({ type: 'CHAT/STREAM_START', runId, sessionId });
 
-    const history = this.getHistory();
-    const session = history.find(s => s.id === sessionId) ?? this.ensureSession(history);
-    const previous = session.turns.map(t => `Q: ${t.q}\nR: ${t.r}`).join('\n\n');
+  //   const history = this.getHistory();
+  //   const session = history.find(s => s.id === sessionId) ?? this.ensureSession(history);
+  //   const previous = session.turns.map(t => `Q: ${t.q}\nR: ${t.r}`).join('\n\n');
 
-    const sticky = (session.stickyContext ?? []).join('\n\n');
+  //   const sticky = (session.stickyContext ?? []).join('\n\n');
 
-    const blobSet = new Set<string>((blobs || []).map(b => b.trim()));
-    const stickySet = new Set<string>(sticky ? [sticky.trim()] : []);
-    const dedupBlobs = [...blobSet].filter(b => !stickySet.has(b));
+  //   const blobSet = new Set<string>((blobs || []).map(b => b.trim()));
+  //   const stickySet = new Set<string>(sticky ? [sticky.trim()] : []);
+  //   const dedupBlobs = [...blobSet].filter(b => !stickySet.has(b));
 
-    const context = [previous, sticky, ...dedupBlobs].filter(Boolean).join('\n\n');
-    // const context = [previous, sticky, ...(blobs || [])].filter(Boolean).join('\n\n');
-    // const context = [previous, ...(blobs || [])].filter(Boolean).join('\n\n');
+  //   const context = [previous, sticky, ...dedupBlobs].filter(Boolean).join('\n\n');
+  //   // const context = [previous, sticky, ...(blobs || [])].filter(Boolean).join('\n\n');
+  //   // const context = [previous, ...(blobs || [])].filter(Boolean).join('\n\n');
 
-    const trace: string[] = [];
-    const onProgress = (text: string) => {
-      this.post({ type:'CHAT/STREAM_DELTA', runId, text });
-      this.post({ type:'TRACE/ENTRY', runId, entry: text });
-      trace.push(text);
-    };
+  //   const trace: string[] = [];
+  //   const onProgress = (text: string) => {
+  //     this.post({ type:'CHAT/STREAM_DELTA', runId, text });
+  //     this.post({ type:'TRACE/ENTRY', runId, entry: text });
+  //     trace.push(text);
+  //   };
 
-    let finalText = '';
-    try {
-      finalText = await this.orchestrator.processQuery({ query: prompt, context }, onProgress);
-    } catch (e:any) {
-      this.post({ type:'CHAT/ERROR', runId, message: String(e?.message || e) });
-    } finally {
+  //   let finalText = '';
+  //   try {
+  //     finalText = await this.orchestrator.processQuery({ query: prompt, context }, onProgress);
+  //   } catch (e:any) {
+  //     this.post({ type:'CHAT/ERROR', runId, message: String(e?.message || e) });
+  //   } finally {
+  //     session.turns.push({ q: prompt, r: finalText, trace, at: Date.now() });
+  //     if (session.turns.length === 1 && titleHint) session.title = titleHint;
+  //     await this.saveHistory(history);
+  //     this.post({ type:'CHAT/STREAM_END', runId, ok:true });
+  //     this.postHistory();
+  //   }
+  // }
+  // ---------- chat run ----------
+private async runChat(sessionId: string, prompt: string, blobs: string[], titleHint: string) {
+  const runId = this.id();
+  this.post({ type: 'CHAT/STREAM_START', runId, sessionId });
+
+  const history = this.getHistory();
+  const session = history.find(s => s.id === sessionId) ?? this.ensureSession(history);
+  const previous = session.turns.map(t => `Q: ${t.q}\nR: ${t.r}`).join('\n\n');
+
+  const sticky = (session.stickyContext ?? []).join('\n\n');
+  const usedSticky = sticky.trim().length > 0;             // <— track whether we sent legacy sticky this hop
+
+  const blobSet = new Set<string>((blobs || []).map(b => b.trim()));
+  const stickySet = new Set<string>(sticky ? [sticky.trim()] : []);
+  const dedupBlobs = [...blobSet].filter(b => !stickySet.has(b));
+
+  const context = [previous, sticky, ...dedupBlobs].filter(Boolean).join('\n\n');
+
+  const trace: string[] = [];
+  const onProgress = (text: string) => {
+    this.post({ type:'CHAT/STREAM_DELTA', runId, text });
+    this.post({ type:'TRACE/ENTRY', runId, entry: text });
+    trace.push(text);
+  };
+
+  const hopIndex = session.turns.length + 1;
+  const hopHeader = this.buildStructuredHopHeader({ runId, sessionId, hopIndex, prompt, context });
+  this.post({ type:'TRACE/ENTRY', runId, entry: hopHeader });
+  trace.push(hopHeader);
+
+  let finalText = '';
+  let wasStopped = false;
+
+  try {
+    finalText = await this.orchestrator.processQuery(
+      { query: prompt, context, hopIndex },
+      onProgress
+    );
+  } catch (e:any) {
+    const msg = String(e?.message || e);
+    if (/cancelled|canceled|Request cancelled/i.test(msg)) {
+      wasStopped = true;
+      this.post({ type:'CHAT/STREAM_END', runId, ok:false, stopped:true });
+      return;
+    }
+    this.post({ type:'CHAT/ERROR', runId, message: msg });
+    return;
+  } finally {
+    if (!wasStopped) {
+      // ✅ One-shot behavior for any legacy stickyContext:
+      // Only clear if we actually used it *and* we produced a response.
+      if (usedSticky && finalText.trim()) {
+        session.stickyContext = [];
+      }
+
       session.turns.push({ q: prompt, r: finalText, trace, at: Date.now() });
       if (session.turns.length === 1 && titleHint) session.title = titleHint;
       await this.saveHistory(history);
@@ -138,6 +200,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       this.postHistory();
     }
   }
+}
+
+
+
 
   // ---------- history ----------
   private getHistory(): Session[] { return (this.context.globalState.get(this.HISTORY_KEY) as Session[]) || []; }
@@ -189,11 +255,25 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.post({ type:'MENTION/DIR_CONTENTS', base: abs, items: out });
   }
 
+  // private async readFile(abs: string) {
+  //   const buf = await vscode.workspace.fs.readFile(vscode.Uri.file(abs));
+  //   const text = new TextDecoder('utf-8').decode(buf);
+  //   this.post({ type:'MENTION/FILE_CONTENT', path: abs, content: text });
+  // }
+  
   private async readFile(abs: string) {
     const buf = await vscode.workspace.fs.readFile(vscode.Uri.file(abs));
     const text = new TextDecoder('utf-8').decode(buf);
-    this.post({ type:'MENTION/FILE_CONTENT', path: abs, content: text });
+
+    const codeBlock = [
+      `<<<CODE path="${abs.replace(/"/g,'\\"')}">>>`,
+      text,
+      `<<<END CODE>>>`
+    ].join('\n');
+
+    this.post({ type:'MENTION/FILE_CONTENT', path: abs, content: codeBlock });
   }
+
 
   // ---------- HTML ----------
   private html(webview: vscode.Webview) {
@@ -252,6 +332,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   const baseUrl = 'http://127.0.0.1:8889';   // <-- your current setting
   const useRaw = false;
   const apiUrl = `${baseUrl}${useRaw ? '/ocr/raw' : '/ocr'}`;
+  
 
   try {
     this.post({ type: 'UPLOAD/START', fileName: name, sessionId });
@@ -286,7 +367,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     } finally {
       clearTimeout(t);
     }
-    this.log?.info?.('[OCR] response', { ok: res.ok, status: res.status, headers: Object.fromEntries(res.headers.entries()) });
+    // this.log?.info?.('[OCR] response', { ok: res.ok, status: res.status, headers: Object.fromEntries(res.headers.entries()) });
+
+    const headersObj: Record<string, string> = {};
+    res.headers.forEach((v, k) => { headersObj[k] = v; });
+    this.log?.info?.('[OCR] response', { ok: res.ok, status: res.status, headers: headersObj });
 
     const raw = await res.text();
     this.log?.info?.('[OCR] raw-length', { len: raw.length });
@@ -303,18 +388,50 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       markdown = raw;
     }
 
-    // persist into stickyContext
+    // inside handleUploadFile, after you compute `markdown`:
     const h = this.getHistory();
     const s = h.find(x => x.id === sessionId) ?? this.ensureSession(h);
     s.stickyContext = s.stickyContext ?? [];
-    s.stickyContext.push(`FILE: ${name}\n\n${markdown}`);
+
+    const docBlock = [
+      `<<<DOC name="${name.replace(/"/g,'\\"')}" mime="${mime || 'application/octet-stream'}">>`,
+      markdown,
+      `<<<END DOC>>>`
+    ].join('\n');
+
+    // push EXACTLY the docBlock (note the >>>)
+    // s.stickyContext.push(docBlock);
     await this.saveHistory(h);
+
+
+    // persist into stickyContext
+    // persist into stickyContext (typed, reconstructable)
+//     const h = this.getHistory();
+//     const s = h.find(x => x.id === sessionId) ?? this.ensureSession(h);
+//     s.stickyContext = s.stickyContext ?? [];
+//     const docBlock = [
+//       `<<<DOC name="${name.replace(/"/g,'\\"')}" mime="${mime || 'application/octet-stream'}">>>`,
+//       markdown,
+//       `<<<END DOC>>>`
+//     ].join('\n');
+//     // s.stickyContext.push(docBlock);
+//     s.stickyContext.push(
+//    `<<<DOC name="${name}" mime="${mime || 'application/octet-stream'}">>\n${markdown}\n<<<END DOC>>>`
+//  );
+
+//     await this.saveHistory(h);
+
+    // const h = this.getHistory();
+    // const s = h.find(x => x.id === sessionId) ?? this.ensureSession(h);
+    // s.stickyContext = s.stickyContext ?? [];
+    // s.stickyContext.push(`FILE: ${name}\n\n${markdown}`);
+    // await this.saveHistory(h);
     this.log?.info?.('[OCR] stickyContext appended', { sessionId, addBytes: markdown.length, elapsedMs: Date.now() - startedAt });
 
     // notify UI
     this.post({ type: 'UPLOAD/SUCCESS', fileName: name, sessionId });
     // optional one-shot injection still ok if you keep it:
-    this.post({ type: 'MENTION/FILE_CONTENT', path: `ATTACH:${name}`, content: markdown });
+    this.post({ type: 'MENTION/FILE_CONTENT', path: `ATTACH:${name}`, content: markdown, mime });
 
   } catch (e: any) {
     this.log?.error?.('[OCR] error', { message: String(e?.message || e), elapsedMs: Date.now() - startedAt });
@@ -323,6 +440,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     // and bubble to chat error UI (existing behavior)
     this.post({ type: 'CHAT/ERROR', message: `Attach/OCR error: ${String(e?.message || e)}` });
   }
+
+  
 }
 //   private async handleUploadFile(sessionId: string, name: string, mime: string, dataBase64: string) {
 //     try {
@@ -398,6 +517,35 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 //       this.post({ type: 'CHAT/ERROR', message: `Attach/OCR error: ${String(e?.message || e)}` });
 //     }
 //   }
+
+  private buildStructuredHopHeader(params: { runId: string; sessionId: string; hopIndex: number; prompt: string; context: string }) {
+  const { runId, sessionId, hopIndex, prompt, context } = params;
+  const ts = new Date().toISOString();
+
+  // Pass through any <<DOC ...>> / <<CODE ...>> blocks already present in `context`.
+  // If none exist, we wrap the raw context into a generic MISC block.
+  const hasTypedBlocks = /<<<(DOC|CODE)\b/.test(context);
+  const miscWrapped = hasTypedBlocks ? '' : [`<<<CONTEXT:MISC>>>`, context, `<<<END CONTEXT:MISC>>>`].join('\n');
+
+  // If typed blocks exist, keep them; otherwise use miscWrapped
+  const typedPart = hasTypedBlocks ? context : miscWrapped;
+
+  return [
+    `<<<HOP id="${runId}" session="${sessionId}" n=${hopIndex} ts="${ts}">>>`,
+    `<<<QUERY>>>`,
+    prompt,
+    `<<<END QUERY>>>`,
+    // Directory structure will be injected by Orchestrator (so it stays in one place)
+    `<<<CONTEXT:DIR>>> (will be appended by server) <<<END CONTEXT:DIR>>>`,
+    typedPart,
+    `<<<RESPONSE>>>`,
+    `<<<END RESPONSE>>>`,
+    `<<<END HOP>>>`
+  ].join('\n');
 }
+}
+
+
+
 
   
