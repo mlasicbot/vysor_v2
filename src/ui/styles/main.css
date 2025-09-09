@@ -12,13 +12,10 @@ html,body,#root{height:100%;margin:0;background:var(--bg);color:var(--fg);font:1
 
 .app{display:grid;grid-template-rows:auto 1fr auto;height:100%;width:100%;min-width:0}
 .topbar{display:flex;gap:8px;align-items:center;padding:8px;border-bottom:1px solid var(--border)}
-.topbar .clear-chat{margin-left:8px}
 .topbar .spacer{flex:1}
 .title{font-weight:600}
 
 .btn{border:1px solid var(--border);background:var(--badge);color:var(--fg);padding:4px 8px;border-radius:8px;cursor:pointer;transition:all 0.2s ease}
-.btn.clear-chat{border-color:var(--accent);background:var(--accent);color:white}
-.btn.clear-chat:hover{background:var(--accent);opacity:0.8}
 .btn.ghost{background:transparent}
 .btn:hover:not(:disabled){background:var(--panel);border-color:var(--accent)}
 .btn:disabled{opacity:.5;cursor:not-allowed}
@@ -33,175 +30,89 @@ html,body,#root{height:100%;margin:0;background:var(--bg);color:var(--fg);font:1
 .bubble:hover{border-color:var(--accent)}
 .bubble .meta{color:var(--muted);font-size:11px;margin-bottom:4px;font-weight:500}
 
-/* Expandable trace section styling */
-.trace-section {
-  margin-top: 8px;
-  border-top: 1px solid var(--border);
-  padding-top: 8px;
+/* Final-only content uses default .body text styles (no extra rules) */
+
+/* Mini HUD (during generation) */
+.mini-hud{
+  border:1px dashed var(--border);
+  border-radius:8px;
+  padding:8px;
+  background:#0004;
+  margin-bottom:8px;
 }
-
-.expand-btn {
-  font-size: 11px;
-  padding: 2px 6px;
-  background: transparent;
-  border: 1px solid var(--border);
-  color: var(--muted);
-  transition: all 0.2s ease;
+.mini-hud-line{
+  display:flex;
+  gap:8px;
+  align-items:flex-start;
+  margin:4px 0;
 }
-
-.expand-btn:hover {
-  background: var(--badge);
-  color: var(--fg);
-  border-color: var(--accent);
+.mini-hud-label{
+  flex:0 0 auto;
+  font-size:11px;
+  color:var(--muted);
+  font-weight:600;
+  text-transform:uppercase;
+  letter-spacing:.02em;
 }
-
-.trace-content {
-  margin-top: 8px;
-  padding: 8px;
-  background: #0006;
-  border-radius: 6px;
-  border: 1px solid var(--border);
-  font-family: ui-monospace, Menlo, Consolas, monospace;
-  font-size: 11px;
-  line-height: 1.4;
-  max-height: 300px;
-  overflow-y: auto;
-}
-
-.trace-header {
-  color: var(--accent);
-  font-weight: 600;
-  margin: 4px 0 2px 0;
-  padding: 2px 0;
-  border-bottom: 1px solid var(--border);
-}
-
-.trace-line {
-  margin: 2px 0;
-  padding: 1px 0;
-  white-space: pre-wrap;
-}
-
-/* Generating indicator styling */
-.generating-indicator {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 8px;
-  padding: 8px;
-  background: #0006;
-  border-radius: 6px;
-  border: 1px solid var(--border);
-}
-
-.spinner {
-  width: 16px;
-  height: 16px;
-  border: 2px solid var(--border);
-  border-top: 2px solid var(--accent);
-  border-radius: 50%;
-  animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-  0% { transform: rotate(0deg); }
-  100% { transform: rotate(360deg); }
-}
-
-.step-text {
-  font-size: 11px;
-  color: var(--muted);
-  font-style: italic;
-}
-
-/* Generating state styling */
-.bubble.generating {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 1px var(--accent);
-}
-
-.trace{font-family:ui-monospace,Menlo,Consolas,monospace;background:#1117;padding:8px;border-radius:8px;white-space:pre-wrap}
-
-/* Optional: code blocks in responses (if you ever render them) */
-.bubble pre, .bubble code{
-  font-family:ui-monospace,Menlo,Consolas,monospace;
+.mini-hud-text{
   white-space:pre-wrap;
   word-break:break-word;
+  flex:1;
 }
+
+/* Generating indicator */
+.generating-indicator{display:flex;align-items:center;gap:8px;margin-top:4px;padding:8px;background:#0006;border-radius:6px;border:1px solid var(--border)}
+.spinner{width:16px;height:16px;border:2px solid var(--border);border-top:2px solid var(--accent);border-radius:50%;animation:spin 1s linear infinite}
+@keyframes spin{0%{transform:rotate(0)}100%{transform:rotate(360deg)}}
+.step-text{font-size:11px;color:var(--muted);font-style:italic}
+
+/* Generating state */
+.bubble.generating{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
+
+/* Trace (if you ever render raw trace text) */
+.trace{font-family:ui-monospace,Menlo,Consolas,monospace;background:#1117;padding:8px;border-radius:8px;white-space:pre-wrap}
+
+/* Code blocks inside messages (expanded details) */
+.bubble pre, .bubble code{font-family:ui-monospace,Menlo,Consolas,monospace;white-space:pre-wrap;word-break:break-word}
 .bubble pre{background:#0006;padding:8px;border-radius:8px;border:1px solid var(--border);overflow:auto}
 
+/* Composer */
 .composer{padding:8px;border-top:1px solid var(--border);background:#0002;position:relative;width:100%;box-sizing:border-box;min-width:0}
 .inputRow{display:flex;gap:6px;align-items:flex-start;width:100%;min-width:0}
 .input{
   flex:1 1 auto;border:1px solid var(--border);background:var(--bg);color:var(--fg);
   border-radius:8px;padding:8px;min-height:42px;max-height:120px;overflow:auto;
-  white-space:pre-wrap; /* keep newlines */ 
-  transition: border-color 0.2s ease;
-  width:100% !important;box-sizing:border-box !important;
-  resize:none;
-  min-width:0;
-  max-width:none;
-  display:block;
+  white-space:pre-wrap;transition:border-color .2s ease;width:100%!important;box-sizing:border-box!important;
+  resize:none;min-width:0;max-width:none;display:block;
 }
-
-/* Ensure the TextArea container div is properly sized */
-.inputRow > div {
-  flex: 1;
-  min-width: 0;
-  width: 100%;
-}
+.inputRow > div{flex:1;min-width:0;width:100%}
 .input:focus{border-color:var(--accent)}
 .input::placeholder{color:var(--muted)}
-
 .status{margin-top:6px;display:flex;align-items:center;gap:8px}
 
+/* Mentions */
 .mentions{
   position:absolute;z-index:1000;background:var(--panel);border:1px solid var(--border);
   border-radius:8px;max-height:240px;overflow:auto;min-width:260px;box-shadow:0 6px 18px #0008;
-  inset-inline-start:8px;bottom:56px; /* anchor above controls; tweak if needed */
+  inset-inline-start:8px;bottom:56px;
 }
 .mentions .item{padding:6px 8px;display:flex;justify-content:space-between;gap:12px;cursor:pointer}
 .mentions .item:hover{background:#fff1}
 .mentions .tag{font-size:10px;border:1px solid var(--border);border-radius:6px;padding:0 6px}
 
+/* History panel */
 .history{position:relative;overflow:visible}
 .history-panel{position:absolute;top:100%;left:0;width:300px;background:var(--panel);border:1px solid var(--border);border-radius:8px;max-height:70vh;overflow-y:auto;overflow-x:hidden;box-shadow:0 8px 20px #0008;scrollbar-width:thin;scrollbar-color:var(--border) transparent;z-index:500;pointer-events:auto;overscroll-behavior:contain}
 .history-panel::-webkit-scrollbar{width:6px}
 .history-panel::-webkit-scrollbar-track{background:transparent}
 .history-panel::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
 .history-panel::-webkit-scrollbar-thumb:hover{background:var(--accent)}
-.history-item{padding:8px 12px;border-bottom:1px solid var(--border);cursor:pointer;transition: background-color 0.2s ease;min-height:20px;display:flex;align-items:center;word-wrap:break-word;overflow-wrap:break-word;word-break:break-word;white-space:normal;text-overflow:ellipsis}
+.history-item{padding:8px 12px;border-bottom:1px solid var(--border);cursor:pointer;transition:background-color .2s ease;min-height:20px;display:flex;align-items:center;word-wrap:break-word;overflow-wrap:break-word;word-break:break-word;white-space:normal;text-overflow:ellipsis}
 .history-item:hover{background:#fff1}
 
-/* Ellipsis menu styling */
-.ellipsis-container {
-  position: relative;
-  display: inline-block;
-}
-
-.ellipsis-menu {
-  position: absolute;
-  top: 100%;
-  right: 0;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  box-shadow: 0 8px 20px #0008;
-  z-index: 1000;
-  min-width: 150px;
-}
-
-.ellipsis-menu > div {
-  padding: 8px 12px;
-  cursor: pointer;
-  border-bottom: 1px solid var(--border);
-  transition: background-color 0.2s ease;
-}
-
-.ellipsis-menu > div:last-child {
-  border-bottom: none;
-}
-
-.ellipsis-menu > div:hover {
-  background: #fff1;
-}
+/* Hop details (expanded view) */
+.hop-box{border:1px solid var(--border);border-radius:10px;margin:8px 0;background:var(--panel)}
+.hop-title{color:var(--accent);font-weight:600;padding:8px 10px;cursor:pointer}
+.hop-content{padding:8px 10px;border-top:1px solid var(--border)}
+.hop-content h4{margin:8px 0 4px;color:var(--fg)}
+.hop-content pre{background:#0006;border:1px solid var(--border);border-radius:6px;padding:8px;overflow:auto}

@@ -1,16 +1,15 @@
 // src/ui/components/MessageBubble.ts
 import { Component } from './Base';
 
+export type HopView = { index: number; thought?: string; tool?: string; output?: string };
+
 export type MessageBubbleProps = {
   role: 'user' | 'assistant';
   label?: string;
   text: string;
   trace?: string[];
-  /** Show a small "Copy" button for assistant messages */
   canCopy?: boolean;
-  /** Custom copy handler (defaults to copying `text`) */
   onCopy?: () => void;
-  /** Whether this message is currently being generated */
   generating?: boolean;
 };
 
@@ -34,156 +33,97 @@ export class MessageBubble extends Component<MessageBubbleProps> {
     const body = document.createElement('div');
     body.className = 'body';
 
-    if (role === 'assistant' && trace?.length) {
-  if (!this.traceExpanded) {
-    const { thought, tool } = this.summarizeLive(trace);
-    const exec = this.lastBlock(trace, 'Execution Result');
+    if (role === 'assistant') {
+      if (generating) {
+        // --- MINI HUD during generation: latest Thought + Selected Tool + Result
+        const hud = document.createElement('div');
+        hud.className = 'mini-hud';
 
-    const wrap = document.createElement('div');
-    if (thought) {
-      const t = document.createElement('div');
-      t.className = 'step-text';
-      t.textContent = `Thought: ${thought}`;
-      wrap.appendChild(t);
-    }
-    if (tool) {
-      const t = document.createElement('div');
-      t.className = 'step-text';
-      t.textContent = `Selected Tool: ${tool}`;
-      wrap.appendChild(t);
-    }
-    if (exec) {
-      const t = document.createElement('div');
-      t.className = 'step-text';
-      t.textContent = `Result: ${this.truncate(exec, 220)}`;
-      wrap.appendChild(t);
-    }
-    if (!thought && !tool && !exec) wrap.textContent = text || '…';
-    body.appendChild(wrap);
-  } else {
-    // expanded: keep your existing grouping; it already shows Tool Args etc.
-    const groups = this.groupByIteration(trace);
-    const ul = document.createElement('ul');
-    for (const g of groups) {
-      const li = document.createElement('li');
-      li.innerHTML = `<strong>Hop ${g.idx || groups.indexOf(g)+1}</strong>`;
-      const sub = document.createElement('ul');
-      for (const line of g.lines) {
-        const s = document.createElement('li');
-        s.textContent = line;
-        sub.appendChild(s);
+        const { thought, tool, exec } = this.summarizeLive(trace || []);
+        if (thought) {
+          const line = document.createElement('div');
+          line.className = 'mini-hud-line';
+          line.innerHTML = `<span class="mini-hud-label">Thought</span><span class="mini-hud-text">${escapeHtml(thought)}</span>`;
+          hud.appendChild(line);
+        }
+        if (tool) {
+          const line = document.createElement('div');
+          line.className = 'mini-hud-line';
+          line.innerHTML = `<span class="mini-hud-label">Tool</span><span class="mini-hud-text">${escapeHtml(tool)}</span>`;
+          hud.appendChild(line);
+        }
+        if (exec) {
+          const line = document.createElement('div');
+          line.className = 'mini-hud-line';
+          line.innerHTML = `<span class="mini-hud-label">Result</span><span class="mini-hud-text">${escapeHtml(exec)}</span>`;
+          hud.appendChild(line);
+        }
+
+        // Status row
+        const status = document.createElement('div');
+        status.className = 'generating-indicator';
+        const spinner = document.createElement('div');
+        spinner.className = 'spinner';
+        const stepText = document.createElement('div');
+        stepText.className = 'step-text';
+        stepText.textContent = this.getCurrentStep(trace);
+        status.appendChild(spinner);
+        status.appendChild(stepText);
+
+        body.appendChild(hud);
+        body.appendChild(status);
+      } else {
+        // --- FINAL: show only the assistant's final text (simple/final answer)
+        body.textContent = text || '';
       }
-      li.appendChild(sub);
-      ul.appendChild(li);
+    } else {
+      // user bubble
+      body.textContent = text || '';
     }
-    body.appendChild(ul);
-  }
 
-  
-}
-
-    
-    // For assistant messages, show only the final answer by default
-    // if (role === 'assistant' && trace?.length) {
-    //   // Extract the final answer (last line that doesn't start with ##)
-    //   const finalAnswer = this.extractFinalAnswer(text, trace);
-    //   body.textContent = finalAnswer;
-      
-    //   // Add expandable trace section
-    //   const traceSection = document.createElement('div');
-    //   traceSection.className = 'trace-section';
-      
-    //   const expandButton = document.createElement('button');
-    //   expandButton.className = 'btn ghost expand-btn';
-    //   expandButton.type = 'button';
-    //   expandButton.textContent = this.traceExpanded ? 'Hide Details' : 'Show Details';
-    //   expandButton.addEventListener('click', () => {
-    //     this.traceExpanded = !this.traceExpanded;
-    //     this.render();
-    //   });
-      
-    //   traceSection.appendChild(expandButton);
-      
-    //   if (this.traceExpanded) {
-    //     const traceContent = document.createElement('div');
-    //     traceContent.className = 'trace-content';
-        
-    //     // Show the full trace with proper formatting
-    //     const fullTrace = this.formatTrace(text, trace);
-    //     traceContent.innerHTML = fullTrace;
-        
-    //     traceSection.appendChild(traceContent);
-    //   }
-      
-    //   this.el.appendChild(traceSection);
-    // } else {
-    //   body.textContent = text;
-    // }
-//     if (role === 'assistant' && trace?.length) {
-//   if (!this.traceExpanded) {
-//     const { thought, tool } = this.summarizeLive(trace);
-//     const wrap = document.createElement('div');
-//     if (thought) {
-//       const t = document.createElement('div');
-//       t.className = 'step-text';
-//       t.textContent = `Thought: ${thought}`;
-//       wrap.appendChild(t);
-//     }
-//     if (tool) {
-//       const t = document.createElement('div');
-//       t.className = 'step-text';
-//       t.textContent = `Selected Tool: ${tool}`;
-//       wrap.appendChild(t);
-//     }
-//     if (!thought && !tool) wrap.textContent = text || '…';
-//     body.appendChild(wrap);
-//   } else {
-//     // Expanded: grouped by iteration with bullets
-//     const groups = this.groupByIteration(trace);
-//     const ul = document.createElement('ul');
-//     for (const g of groups) {
-//       const li = document.createElement('li');
-//       li.innerHTML = `<strong>Hop ${g.idx || groups.indexOf(g)+1}</strong>`;
-//       const sub = document.createElement('ul');
-//       for (const line of g.lines) {
-//         const s = document.createElement('li');
-//         s.textContent = line;
-//         sub.appendChild(s);
-//       }
-//       li.appendChild(sub);
-//       ul.appendChild(li);
-//     }
-//     body.appendChild(ul);
-//   }
-// }
-
-    
     this.el.appendChild(body);
 
-    if (role === 'assistant' && (trace?.length ?? 0) > 0) {
+    // Details toggle appears only for assistant messages that have any trace
+    if (role === 'assistant' && (this.props.trace?.length ?? 0) > 0) {
       const toggle = document.createElement('button');
       toggle.className = 'btn ghost expand-btn';
       toggle.textContent = this.traceExpanded ? 'Hide details' : 'Show details';
       toggle.onclick = () => { this.traceExpanded = !this.traceExpanded; this.render(); };
       this.el.appendChild(toggle);
-    }
 
+      if (this.traceExpanded) {
+        // Expanded: hops with Thought / Tool Selected / Tool Execution Result (no Tool Args).
+        const hops = this.toHops(this.props.trace!);
+        for (const h of hops) {
+          const box = document.createElement('details');
+          box.className = 'hop-box';
+          box.open = false;
 
-    // Add generating indicator for assistant messages
-    if (role === 'assistant' && generating) {
-      const generatingIndicator = document.createElement('div');
-      generatingIndicator.className = 'generating-indicator';
-      
-      const spinner = document.createElement('div');
-      spinner.className = 'spinner';
-      
-      const stepText = document.createElement('div');
-      stepText.className = 'step-text';
-      stepText.textContent = this.getCurrentStep(trace);
-      
-      generatingIndicator.appendChild(spinner);
-      generatingIndicator.appendChild(stepText);
-      this.el.appendChild(generatingIndicator);
+          const sum = document.createElement('summary');
+          sum.className = 'hop-title';
+          sum.textContent = `Hop ${h.index}`;
+          box.appendChild(sum);
+
+          const cont = document.createElement('div');
+          cont.className = 'hop-content';
+
+          if (h.thought) {
+            const hd = document.createElement('h4'); hd.textContent = 'Thought'; cont.appendChild(hd);
+            const pre = document.createElement('pre'); pre.textContent = h.thought; cont.appendChild(pre);
+          }
+          if (h.tool) {
+            const hd = document.createElement('h4'); hd.textContent = 'Tool Selected'; cont.appendChild(hd);
+            const pre = document.createElement('pre'); pre.textContent = h.tool; cont.appendChild(pre);
+          }
+          if (h.output) {
+            const hd = document.createElement('h4'); hd.textContent = 'Tool Execution Result'; cont.appendChild(hd);
+            const pre = document.createElement('pre'); pre.textContent = h.output; cont.appendChild(pre);
+          }
+
+          box.appendChild(cont);
+          this.el.appendChild(box);
+        }
+      }
     }
 
     if (canCopy) {
@@ -193,13 +133,9 @@ export class MessageBubble extends Component<MessageBubbleProps> {
       b.textContent = 'Copy';
       b.ariaLabel = 'Copy message';
       b.addEventListener('click', () => {
-        if (onCopy) {
-          onCopy();
-          return;
-        }
-        // Default copy behavior
-        const toCopy = [text, ...(trace ?? [])].filter(Boolean).join('\n');
-        if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+        if (onCopy) { onCopy(); return; }
+        const toCopy = this.props.text || '';
+        if (navigator.clipboard?.writeText) {
           navigator.clipboard.writeText(toCopy).catch(() => fallbackCopy(toCopy));
         } else {
           fallbackCopy(toCopy);
@@ -209,189 +145,108 @@ export class MessageBubble extends Component<MessageBubbleProps> {
     }
   }
 
-  private getCurrentStep(trace?: string[]): string {
-    if (!trace || trace.length === 0) return 'Thinking...';
-    
-    const lastTrace = trace[trace.length - 1];
-    
-    // Check for specific step indicators
-    if (lastTrace.includes('## Thought')) {
-      const thoughtMatch = lastTrace.match(/## Thought #(\d+)/);
-      if (thoughtMatch) {
-        return `Thinking (Step ${thoughtMatch[1]})...`;
-      }
-      return 'Thinking...';
-    }
-    
-    if (lastTrace.includes('## Selected Tool')) {
-      const toolMatch = lastTrace.match(/## Selected Tool\s*\n([^\n]+)/);
-      if (toolMatch) {
-        return `Selected Tool: ${toolMatch[1].trim()}`;
-      }
-      return 'Selecting Tool...';
-    }
-    
-    if (lastTrace.includes('## Tool Args')) {
-      return 'Preparing Tool Arguments...';
-    }
-    
-    if (lastTrace.includes('## Execution Result')) {
-      return 'Executing Tool...';
-    }
-    
-    if (lastTrace.includes('## Final')) {
-      return 'Finalizing Response...';
-    }
-    
-    // Check for tool events
-    if (lastTrace.includes('TOOL:')) {
-      return 'Tool Event...';
-    }
-    
-    // Check for general processing
-    if (lastTrace.includes('{') && lastTrace.includes('}')) {
-      return 'Processing Data...';
-    }
-    
-    return 'Processing...';
+  // ---------- helpers ----------
+
+  // Hide bulky bodies from DOC/CODE blocks when rendering details
+  private stripTypedBlockContent(s: string): string {
+    s = s.replace(/<<<DOC[^>]*>>[\s\S]*?<<<END DOC>>>/g, (m) => {
+      const head = m.match(/<<<DOC[^>]*>>/)?.[0] ?? '<<<DOC>>>';
+      return `${head} [hidden] <<<END DOC>>>`;
+    });
+    s = s.replace(/<<<CODE[^>]*>>[\s\S]*?<<<END CODE>>>/g, (m) => {
+      const head = m.match(/<<<CODE[^>]*>>/)?.[0] ?? '<<<CODE>>>';
+      return `${head} [hidden] <<<END CODE>>>`;
+    });
+    return s;
   }
 
-  private extractFinalAnswer(text: string, trace: string[]): string {
-    // Look for the final answer in the trace
-    // Usually it's the last meaningful content after all the ## sections
-    const fullContent = [text, ...trace].join('\n');
-    
-    // Split by lines and find the last non-header line
-    const lines = fullContent.split('\n');
-    let finalAnswer = '';
-    
-    // Look for the last meaningful response that's not a system message
-    for (let i = lines.length - 1; i >= 0; i--) {
-      const line = lines[i].trim();
-      if (line && 
-          !line.startsWith('##') && 
-          !line.startsWith('Thought') && 
-          !line.startsWith('Selected Tool') && 
-          !line.startsWith('Tool Args') && 
-          !line.startsWith('Execution Result') && 
-          !line.startsWith('Final') &&
-          !line.includes('{') && // Skip JSON objects
-          !line.includes('}') &&
-          line.length > 3) { // Skip very short lines
-        finalAnswer = line;
-        break;
-      }
-    }
-    
-    // If no final answer found in trace, try to extract from the original text
-    if (!finalAnswer) {
-      // Look for the last non-empty line in the original text
-      const textLines = text.split('\n').filter(line => line.trim().length > 0);
-      if (textLines.length > 0) {
-        const lastTextLine = textLines[textLines.length - 1].trim();
-        if (lastTextLine && !lastTextLine.startsWith('##')) {
-          finalAnswer = lastTextLine;
+  private toHops(trace: string[]): HopView[] {
+    const hops: HopView[] = [];
+    let cur: HopView | null = null;
+
+    const hasContent = (h?: HopView | null) =>
+      !!h && (Boolean(h.thought) || Boolean(h.tool) || Boolean(h.output));
+
+    const pushIfContent = () => {
+      if (hasContent(cur)) hops.push(cur as HopView);
+    };
+
+    for (const raw of trace) {
+      const s = this.stripTypedBlockContent(raw || '');
+
+      if (s.includes('<<<HOP')) {
+        // If we hit another HOP tag and the current hop is still empty,
+        // treat this as a duplicate header and ignore it.
+        if (cur && !hasContent(cur)) {
+          continue;
         }
+        // Otherwise, finish the previous hop (if it had content) and start a new one.
+        pushIfContent();
+        cur = { index: (hops.length + 1) };
+        continue;
       }
+
+      const thought = s.match(/^##\s*Thought[^\n]*\n([\s\S]*)$/);
+      if (thought) { (cur ??= { index: (hops.length + 1) }).thought = thought[1].trim(); continue; }
+
+      const tool = s.match(/^##\s*Selected Tool[^\n]*\n([\s\S]*)$/);
+      if (tool) { (cur ??= { index: (hops.length + 1) }).tool = tool[1].trim(); continue; }
+
+      // We intentionally map "Execution Result" to the UI field "output",
+      // because expanded view should show the VS Code execution result.
+      const out  = s.match(/^##\s*Execution Result[^\n]*\n([\s\S]*)$/);
+      if (out)  { (cur ??= { index: (hops.length + 1) }).output = out[1].trim(); continue; }
+
+      // Intentionally ignore "## Tool Args" here.
     }
-    
-    // If still no final answer, return a default message
-    return finalAnswer || 'Response generated successfully.';
+
+    // Push the last hop only if it carries any content
+    pushIfContent();
+    return hops;
   }
 
-  // private formatTrace(text: string, trace: string[]): string {
-  //   // Format the trace with proper markdown-like styling
-  //   const fullContent = [text, ...trace].join('\n');
-  //   const lines = fullContent.split('\n');
-    
-  //   return lines.map(line => {
-  //     if (line.startsWith('##')) {
-  //       return `<div class="trace-header">${line}</div>`;
-  //     } else if (line.trim()) {
-  //       return `<div class="trace-line">${line}</div>`;
-  //     } else {
-  //       return '<br>';
-  //     }
-  //   }).join('');
-  // }
-  private formatTrace(text: string, trace: string[]): string {
-    const esc = (s: string) =>
-      s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    const fullContent = [text, ...trace].join('\n');
-    const lines = fullContent.split('\n');
-    return lines.map(line => {
-      if (line.startsWith('##')) {
-        return `<div class="trace-header">${esc(line)}</div>`;
-      } else if (line.trim()) {
-        return `<div class="trace-line">${esc(line)}</div>`;
-      } else {
-        return '<br>';
-      }
-    }).join('');
-  }
-
-  // --- add these helpers inside MessageBubble class ---
-  private summarizeLive(trace?: string[]): { thought?: string; tool?: string } {
-    if (!trace?.length) return {};
-    // scan from the end to get the latest
+  private summarizeLive(trace: string[]): { thought?: string; tool?: string; exec?: string } {
     let thought: string | undefined;
     let tool: string | undefined;
+    let exec: string | undefined;
     for (let i = trace.length - 1; i >= 0; i--) {
-      const line = trace[i];
+      const line = trace[i] || '';
       if (!tool && /^##\s*Selected Tool/i.test(line)) {
-        // next non-empty line is the tool name (often on same or next line)
         const next = trace[i + 1]?.trim();
         tool = (next && !next.startsWith('##')) ? next : line.replace(/^##\s*Selected Tool\s*/i, '').trim();
       }
       if (!thought && /^##\s*Thought/i.test(line)) {
-        // take the next non-header line for brevity
         const next = trace[i + 1]?.trim();
         thought = (next && !next.startsWith('##')) ? next : line.replace(/^##\s*Thought.*?/i, '').trim();
       }
-      if (thought && tool) break;
+      if (!exec && /^##\s*Execution Result/i.test(line)) {
+        const next = trace[i + 1]?.trim();
+        exec = (next && !next.startsWith('##')) ? next : line.replace(/^##\s*Execution Result\s*/i, '').trim();
+      }
+      if (thought && tool && exec) break;
     }
-    return { thought, tool };
+    return { thought, tool, exec };
   }
 
-  private groupByIteration(trace: string[]): Array<{ idx: number; lines: string[] }> {
-    // Split on "## Thought #k" markers to form iterations
-    const groups: Array<{ idx: number; lines: string[] }> = [];
-    let cur: { idx: number; lines: string[] } | null = null;
-    for (const ln of trace) {
-      const m = ln.match(/^##\s*Thought\s*#(\d+)/i);
-      if (m) {
-        cur && groups.push(cur);
-        cur = { idx: parseInt(m[1], 10), lines: [ln] };
-      } else {
-        (cur ??= { idx: 0, lines: [] }).lines.push(ln);
-      }
-    }
-    cur && groups.push(cur);
-    return groups;
-  }
+  private getCurrentStep(trace?: string[]): string {
+    if (!trace?.length) return 'Thinking...';
+    const last = trace[trace.length - 1];
 
-  private lastBlock(trace: string[], header: string): string | undefined {
-  // Find the last "## <header>" then collect the following non-header lines
-  for (let i = trace.length - 1; i >= 0; i--) {
-    const line = trace[i];
-    if (line.startsWith(`## ${header}`)) {
-      const lines: string[] = [];
-      for (let j = i + 1; j < trace.length; j++) {
-        const ln = trace[j];
-        if (ln.startsWith('## ')) break;
-        lines.push(ln);
-      }
-      return lines.join('\n').trim();
+    if (last.includes('## Thought')) {
+      const m = last.match(/## Thought #(\d+)/);
+      return m ? `Thinking (Step ${m[1]})...` : 'Thinking...';
     }
+    if (last.includes('## Selected Tool')) return 'Selecting Tool...';
+    if (last.includes('## Tool Args')) return 'Preparing Tool Arguments...';
+    if (last.includes('## Execution Result')) return 'Executing Tool...';
+    if (last.includes('## Final')) return 'Finalizing Response...';
+    return 'Processing...';
   }
-  return undefined;
 }
 
-private truncate(s: string, n: number) {
-  return s.length <= n ? s : s.slice(0, n - 1) + '…';
-}
-
-
+/** Escape for inline HTML use */
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
 /** Fallback copy using a temporary textarea (for older webview runtimes) */
@@ -406,5 +261,3 @@ function fallbackCopy(text: string): void {
   try { document.execCommand('copy'); } catch { /* ignore */ }
   document.body.removeChild(ta);
 }
-
-

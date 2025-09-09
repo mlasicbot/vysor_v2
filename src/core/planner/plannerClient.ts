@@ -109,49 +109,6 @@ export class PlannerClient {
           body: JSON.stringify(body),
           signal: controller.signal,
         });
-    // const url = this.baseUrl + path;
-
-    // // Compose timeout + external abort into one signal
-    // const controller = new AbortController();
-    // const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
-    // const onAbort = () => controller.abort();
-
-    // try {
-    //   if (externalSignal) {
-    //     if (externalSignal.aborted) controller.abort();
-    //     else externalSignal.addEventListener('abort', onAbort, { once: true });
-    //   }
-
-    //   const res = await fetch(url, {
-    //     method: 'POST',
-    //     headers: { 'Content-Type': 'application/json' },
-    //     body: JSON.stringify(body),
-    //     signal: controller.signal,
-    //   });
-
-  //     const text = await res.text();
-  //     let data: any;
-  //     try {
-  //       data = text ? JSON.parse(text) : {};
-  //     } catch {
-  //       throw new Error(`Non-JSON response from ${path}: ${text?.slice(0, 200)}`);
-  //     }
-
-  //     if (!res.ok) {
-  //       // FastAPI typically returns {"detail": "..."}
-  //       const detail = typeof data?.detail === 'string' ? data.detail : JSON.stringify(data);
-  //       throw new Error(`Planner ${path} failed: ${detail}`);
-  //     }
-
-  //     return data as T;
-  //   } catch (err: any) {
-  //     if (err?.name === 'AbortError') throw new Error('Request cancelled');
-  //     throw err instanceof Error ? err : new Error(String(err));
-  //   } finally {
-  //     clearTimeout(timeout);
-  //     if (externalSignal) externalSignal.removeEventListener('abort', onAbort);
-  //   }
-  // }
 
         const text = await res.text();
         let data: any;

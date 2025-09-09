@@ -1,8 +1,9 @@
-    // © ASICBOT Private Limited Inc
-// Orchestrator — coordinates UI ↔ Planner ↔ File Tools workflow
+// © ASICBOT Private Limited Inc
+// Orchestrator — coordinates UI ↔ Planner ↔ File Tools workflow (strict per-hop trajectory)
 
 import { PlannerClient } from './planner/plannerClient';
 import { FileOperationTools } from './tools';
+import * as util from 'util';
 
 export interface OrchestratorConfig {
   plannerBaseUrl: string;
@@ -13,26 +14,24 @@ export interface OrchestratorConfig {
   networkRetryBackoffMs?: number;
 }
 
-// export interface QueryRequest {
-//   query: string;
-//   context?: string;
-//   maxIterations?: number;
-// }
-
 export interface QueryRequest {
   query: string;
   context?: string;
   maxIterations?: number;
-  hopIndex?: number; // optional, UI may pass it; we’ll auto-number if absent
+  hopIndex?: number; // (unused in this version; hop numbers are internal)
 }
 
-let GLOBAL_HOP_COUNTER = 0;
-
-// export type ProgressCallback = (text: string, done: boolean) => void;
 export type ProgressCallback = (text: string, done?: boolean) => void;
 
-
 export class Orchestrator {
+  private raw(x: unknown): string {
+    try {
+      return JSON.stringify(x, (_k, v) => (typeof v === 'bigint' ? v.toString() : v), 2);
+    } catch {
+      return util.inspect(x, { depth: null, colors: false, maxArrayLength: null });
+    }
+  }
+
   private isGenerating = false;
   private abortController: AbortController | null = null;
   private planner: PlannerClient;
@@ -40,34 +39,6 @@ export class Orchestrator {
 
   private maxIterations: number;
   private currentCfg: OrchestratorConfig;
-
-  private sanitizeStringToken(s: string): string {
-    let t = s.trim();
-    // drop fenced code block markers entirely
-    if (t.includes('```')) {
-      t = t.split('\n').filter(l => !/^```/.test(l.trim())).join('\n').trim();
-    }
-    // strip surrounding quotes/backticks again
-    t = t.replace(/^([`'"])(.*)\1$/s, '$2').trim();
-    t = t.replace(/^[`'"]+|[`'"]+$/g, '');
-    return t;
-  }
-
-  /** Recursively sanitize any strings inside tool args */
-  private sanitizeArgsDeep(v: unknown): unknown {
-    if (typeof v === 'string') return this.sanitizeStringToken(v);
-    if (Array.isArray(v)) return v.map(x => this.sanitizeArgsDeep(x));
-    if (v && typeof v === 'object') {
-      const out: Record<string, unknown> = {};
-      for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
-        // sanitize keys too just in case
-        const sk = this.sanitizeStringToken(String(k));
-        out[sk] = this.sanitizeArgsDeep(val);
-      }
-      return out;
-    }
-    return v;
-  }
 
   constructor(config: OrchestratorConfig, deps?: { planner?: PlannerClient; fileTools?: FileOperationTools }) {
     this.currentCfg = { ...config };
@@ -100,34 +71,51 @@ export class Orchestrator {
 
     const iterations = req.maxIterations ?? this.maxIterations;
 
-    // Build hop-scoped, reconstructable header
-    let trajectory = await this.composeHeader(req.context, req.query, req.hopIndex ?? 1);
+    // Trajectory we send to the planner (composed of completed/ongoing HOP blocks)
+    let trajectory = '';
 
-    // (Optional but handy) show it once in the trace
-    onProgress?.(this.pretty('Hop Context', trajectory), false);
+    const miscOnce = this.buildMiscBlock(req.context);
+
     let finalResponse = '';
-
     let consecutiveTimeouts = 0;
+    let hopNo = 0;
 
     try {
       for (let i = 0; i < iterations; i++) {
         this.ensureNotCancelled();
 
-        // --- 1) THINK ---
+        // ---------- Start a new hop with QUERY + CONTEXT ----------
+        hopNo++;
+        const dirPre = await this.safeDirTree();
+        const hopStart = this.startHop(hopNo, req.query, dirPre, hopNo === 1 ? miscOnce : '');
+        trajectory += hopStart;
+        // Emit hop header (and initial context) to TRACE so UI can segment hops
+        onProgress?.(hopStart, false);
+
+        // ---------- 1) THINK ----------
         let thought = '';
         try {
-          const think = await this.planner.think({ trajectory }, this.abortController.signal);
-          thought = String(think.output ?? '');
+          const thinkResp = await this.planner.think({ trajectory }, this.abortController.signal);
+          thought = String(this.out<string>(thinkResp) ?? '');
+          // Append to trajectory (typed block)
+          trajectory += this.block('THOUGHTS', thought);
+          // Stream minimal line for compressed view
           onProgress?.(this.pretty(`Thought #${i + 1}`, thought), false);
         } catch (e) {
           if (/(timed out)/i.test(String(e))) consecutiveTimeouts++;
-
           const errText = this.stepError('Think', e);
           onProgress?.(errText, false);
-          // Append error to trajectory so planner can react in the next iteration
-          trajectory = this.appendIterationBlock(trajectory, '(error in think)', '(skipped)', {}, errText);
-          // Continue to next iteration to let planner recover
-          // continue;
+
+          // Close hop with placeholders + error as execution result
+          trajectory += this.block('THOUGHTS', '(error in think)');
+          trajectory += this.block('TOOL SELECTION', '(none)');
+          trajectory += this.block('TOOL ARGUMENTS', {});
+          trajectory += this.block('TOOL EXECUTION RESULT', errText);
+          trajectory += '<<<END HOP>>>\n';
+
+          // Make sure mini-HUD shows a Result line too
+          onProgress?.(this.pretty('Execution Result', errText), false);
+
           if (consecutiveTimeouts >= 2) {
             finalResponse = 'Planner timed out repeatedly. Increase "vysor.requestTimeoutMs" (e.g., 120000) or try a smaller step.';
             onProgress?.(this.pretty('Final', finalResponse), true);
@@ -139,72 +127,83 @@ export class Orchestrator {
 
         this.ensureNotCancelled();
 
-        // --- 2) TOOL SELECTION ---
+        // ---------- 2) TOOL SELECTION ----------
         let selectedTool = '';
         try {
-          const toolSel = await this.planner.selectTool({ trajectory }, this.abortController.signal);
-          selectedTool = String(toolSel.output ?? '').trim();
-          selectedTool = selectedTool.replace(/^([`'"])(.*)\1$/s, '$2').trim();
-          selectedTool = this.sanitizeStringToken(selectedTool);
+          const selResp = await this.planner.selectTool({ trajectory }, this.abortController.signal);
+          selectedTool = String(this.out<string>(selResp) ?? '').trim();
+          trajectory += this.block('TOOL SELECTION', selectedTool || '(none)');
           onProgress?.(this.pretty('Selected Tool', selectedTool || '(none)'), false);
         } catch (e) {
           const errText = this.stepError('Tool Selection', e);
           onProgress?.(errText, false);
-          trajectory = this.appendIterationBlock(trajectory, thought, '(error selecting tool)', {}, errText);
+
+          trajectory += this.block('TOOL SELECTION', '(error)');
+          trajectory += this.block('TOOL ARGUMENTS', {});
+          trajectory += this.block('TOOL EXECUTION RESULT', errText);
+          trajectory += '<<<END HOP>>>\n';
+          onProgress?.(this.pretty('Execution Result', errText), false);
           continue;
         }
 
         this.ensureNotCancelled();
 
-        // If planner decides no tool / final text-only answer
-        if (!selectedTool || selectedTool.toLowerCase() === 'none') {
-          const execResult = thought || 'No further action.';
-          trajectory = this.appendIterationBlock(trajectory, thought, '(none)', {}, execResult);
-          finalResponse = execResult;
-          onProgress?.(this.pretty('Final', finalResponse), true);
-          return finalResponse;
-        }
-
-        // --- 3) TOOL FORMATTER (args) ---
-        let toolArgs: unknown = {};
+        // ---------- 3) TOOL FORMATTER ----------
+        let formatterOut: any = {};
         try {
-          const toolFmt = await this.planner.formatTool(
+          const fmtResp = await this.planner.formatTool(
             { tool_name: selectedTool, trajectory },
             this.abortController.signal
           );
-          toolArgs = this.maybeParseJson(toolFmt.output);
-          toolArgs = this.sanitizeArgsDeep(toolArgs);
-          onProgress?.(this.pretty('Tool Args', toolArgs), false);
+          formatterOut = this.out<Record<string, unknown> | string>(fmtResp) ?? {};
+          trajectory += this.block('TOOL ARGUMENTS', formatterOut);
+          onProgress?.(this.pretty('Tool Args', formatterOut), false);
+
+          // Terminal tools return final text directly via formatter (simple_query / final_answer)
+          const finalFromFormatter = this.pickFinalText(selectedTool, formatterOut);
+          if (finalFromFormatter && finalFromFormatter.trim()) {
+            // Treat as execution result for this hop, then END HOP and finalize
+            trajectory += this.block('TOOL EXECUTION RESULT', finalFromFormatter);
+            trajectory += '<<<END HOP>>>\n';
+
+            onProgress?.(this.pretty('Execution Result', finalFromFormatter), false);
+            onProgress?.(this.pretty('Final', finalFromFormatter), true);
+            return finalFromFormatter;
+          }
         } catch (e) {
           const errText = this.stepError('Tool Formatter', e);
           onProgress?.(errText, false);
-          // Append formatter error and continue
-          trajectory = this.appendIterationBlock(trajectory, thought, selectedTool, { error: true, stage: 'format', message: errText }, errText);
+
+          trajectory += this.block('TOOL ARGUMENTS', { error: true, stage: 'format' });
+          trajectory += this.block('TOOL EXECUTION RESULT', errText);
+          trajectory += '<<<END HOP>>>\n';
+          onProgress?.(this.pretty('Execution Result', errText), false);
           continue;
         }
 
-        // --- 4) EXECUTE TOOL ---
+        this.ensureNotCancelled();
+
+        // ---------- 4) EXECUTE TOOL (VS Code / FS side) ----------
         let execResult = '';
         try {
-          execResult = await this.fileTools.executeFileOperation(selectedTool, toolArgs);
+          execResult = await this.fileTools.executeFileOperation(selectedTool, formatterOut);
           onProgress?.(this.pretty('Execution Result', execResult), false);
         } catch (e) {
-          // executeFileOperation already tries to return strings, but if anything bubbles:
           execResult = this.stepError('Tool Execution', e);
           onProgress?.(execResult, false);
         }
 
-        // Append one iteration block to the trajectory
-        trajectory = this.appendIterationBlock(trajectory, thought, selectedTool, toolArgs, execResult);
+        // Append EXECUTION RESULT then close hop
+        trajectory += this.block('TOOL EXECUTION RESULT', execResult);
+        trajectory += '<<<END HOP>>>\n';
 
-        // Finalization check
-        if (this.fileTools.isFinalResponse(selectedTool, toolArgs)) {
-          finalResponse = execResult;
+        // If this non-reasoning tool still yielded a final user-facing response, finalize.
+        if (this.fileTools.isFinalResponse(selectedTool, formatterOut)) {
+          finalResponse = execResult || 'OK';
           onProgress?.(this.pretty('Final', finalResponse), true);
-          return finalResponse || 'OK';
+          return finalResponse;
         }
 
-        // Stream a friendly progress line
         onProgress?.(this.fileTools.formatProgressMessage(selectedTool, execResult, i + 1), false);
       }
 
@@ -215,11 +214,9 @@ export class Orchestrator {
       const msg = err instanceof Error ? err.message : String(err);
       const isAbort = /AbortError|cancelled|canceled/i.test(msg);
       if (isAbort) {
-        // Announce a friendly stop in the trace, then let caller handle revert
-        onProgress?.(`## Stopped\nUser requested stop.`);
+        onProgress?.('## Stopped\nUser requested stop.');
         throw err instanceof Error ? err : new Error('Request cancelled');
       }
-      // Non-cancel errors: surface as a final formatted line
       onProgress?.(this.stepError('Unhandled', msg), true);
       return `Error: ${msg}`;
     } finally {
@@ -238,175 +235,35 @@ export class Orchestrator {
       partial.modelName !== undefined ||
       partial.networkRetries !== undefined ||
       partial.networkRetryBackoffMs !== undefined
-    ){
+    ) {
       this.planner = new PlannerClient({
         baseUrl: this.currentCfg.plannerBaseUrl,
         timeoutMs: this.currentCfg.requestTimeoutMs ?? 120_000,
         modelName: this.currentCfg.modelName,
         retries: this.currentCfg.networkRetries ?? 1,
-        retryBackoffMs: this.currentCfg.networkRetryBackoffMs ?? 1500, 
+        retryBackoffMs: this.currentCfg.networkRetryBackoffMs ?? 1500,
       });
     }
   }
 
-  // ---- Trajectory formatting ----
-  // replace composeHeader with this version
+  // ---- Minimal helpers ----
 
-  private composeHeader(context: string | undefined, query: string): Promise<string>;
-  private composeHeader(context: string | undefined, query: string, hopIndex: number): Promise<string>;
-
-
-  private async composeHeader(
-  context: string | undefined,
-  query: string,
-  hopIndex = 1
-): Promise<string> {
-
-  const hopNo = ++GLOBAL_HOP_COUNTER;
-
-  // Directory structure
-  let workspaceDir = '';
-  try {
-    const ws = this.fileTools.getWorkspacePath();
-    workspaceDir = (await this.fileTools.generateDirectoryStructure(ws)).trimEnd();
-  } catch (e) {
-    workspaceDir = `<<error generating workspace tree: ${String(e)}>>`;
+  private out<T>(resp: any): T {
+    return (resp && typeof resp === 'object' && 'output' in resp)
+      ? (resp as any).output as T
+      : (resp as T);
   }
 
-  const ctx = (context || '').trim();
-
-  // If caller already wrapped context with CONTEXT:* blocks, don’t re-wrap.
-  // Otherwise, wrap raw typed DOC/CODE into CONTEXT:MISC (as tests expect).
-  const hasContextBlocks = /<<<CONTEXT:(DIR|MISC)\b/.test(ctx);
-  const miscWrapped = ctx
-    ? (hasContextBlocks ? ctx : `<<<CONTEXT:MISC>>>\n${ctx}\n<<<END CONTEXT:MISC>>>`)
-    : '';
-
-  return [
-    `<<<HOP #${hopNo}>>>`,
-    `<<<QUERY>>>${query.trim()}<<<END QUERY>>>`,
-    `<<<CONTEXT:DIR name="workspace">>`,
-    workspaceDir,
-    `<<<END CONTEXT:DIR>>>`,
-    miscWrapped,
-    `<<<END HOP>>>`,
-    ''
-  ].join('\n');
-}
-
-
-  // private async composeHeader(context: string | undefined, query: string): Promise<string> {
-  //   const lines: string[] = [];
-    
-  //   // Always generate directory structure as context
-  //   try {
-  //     const workspacePath = this.fileTools.getWorkspacePath();
-  //     const dirStructure = await this.fileTools.generateDirectoryStructure(workspacePath);
-  //     // lines.push(`Directory Structure:\n\`\`\`markdown\n${dirStructure}\n\`\`\``);
-  //     lines.push(`Directory Structure:\n${dirStructure}`);
-  //   } catch (error) {
-  //     lines.push(`Directory Structure: Error generating - ${error}`);
-  //   }
-    
-  //   if (context && context.trim().length > 0) lines.push(`Additional Context: ${context.trim()}`);
-  //   lines.push(`Query: ${query.trim()}`, '');
-  //   return lines.join('\n');
-  // }
-//   private async composeHeader(context: string | undefined, query: string, hopIndex = 1): Promise<string> {
-
-//   const hopNo = ++GLOBAL_HOP_COUNTER;
-//   let workspaceDir = '';
-//   try {
-//       const ws = this.fileTools.getWorkspacePath();
-//       workspaceDir = await this.fileTools.generateDirectoryStructure(ws);
-//     } catch (e) {
-//       workspaceDir = `<<error generating workspace tree: ${String(e)}>>`;
-//     }
-//   const ctx = (context || '').trim();
-//   return [
-//     `<<<HOP #${hopNo}>>>`,
-//     `<<<QUERY>>>${query.trim()}<<<END QUERY>>>`,
-//     `<<<CONTEXT:DIR name="workspace">>`,
-//     workspaceDir.trim(),
-//     `<<<END CONTEXT:DIR>>>`,
-//     ctx ? `<<<CONTEXT:MISC>>>\n${ctx}\n<<<END CONTEXT:MISC>>>` : '',
-//     `<<<END HOP>>>`,
-//     ''
-//   ].filter(Boolean).join('\n');
-// }
-
-  // const lines: string[] = [];
-  // const runTs = new Date().toISOString();
-
-  
-
-  // // Directory structure (server-authoritative)
-  // let dirStr = '';
-  // try {
-  //   const workspacePath = this.fileTools.getWorkspacePath();
-  //   dirStr = await this.fileTools.generateDirectoryStructure(workspacePath);
-  // } catch (error:any) {
-  //   dirStr = `Error generating directory structure: ${String(error?.message || error)}`;
-  // }
-
-  // // If the incoming context already contains typed blocks (DOC/CODE), keep them as-is.
-  // const hasTypedBlocks = typeof context === 'string' && /<<<(DOC|CODE|CONTEXT:(DIR|MISC))\b/.test(context);
-  // const miscWrapped = !context ? '' : [
-  //   `<<<CONTEXT:MISC>>>`,
-  //   context,
-  //   `<<<END CONTEXT:MISC>>>`
-  // ].join('\n');
-
-  // lines.push(
-  //   `<<<HOP n=${hopIndex} ts="${runTs}">>>`,
-  //   `<<<QUERY>>>`,
-  //   query.trim(),
-  //   `<<<END QUERY>>>`,
-  //   `<<<CONTEXT:DIR>>>`,
-  //   dirStr.trim(),
-  //   `<<<END CONTEXT:DIR>>>`,
-  //   hasTypedBlocks ? (context || '') : miscWrapped,
-  //   `<<<RESPONSE>>>`,           // model fills this conceptually; we also stream "Final" separately
-  //   `<<<END RESPONSE>>>`,
-  //   `<<<END HOP>>>`,
-  //   '' // newline for safety
-  // );
-
-  // return lines.join('\n');
-// }
-
-
-  private appendIterationBlock(
-    trajectory: string,
-    thought: string,
-    selectedTool: string,
-    toolArgs: unknown,
-    execResult: string
-  ): string {
-    const block = [
-      `Thought: ${thought}`,
-      `Selected Tool: ${selectedTool}`,
-      `Tool Args: ${this.safeString(toolArgs)}`,
-      `Execution Result: ${execResult}`,
-      ''
-    ].join('\n');
-    return trajectory + block;
+  /** Extract end-user text for terminal tools from formatter payload. */
+  private pickFinalText(tool: string, args: any): string {
+    const t = (tool || '').toLowerCase();
+    if (t === 'simple_query') return String(args?.answer ?? '');
+    if (t === 'final_answer') return String(args?.final_answer ?? '');
+    return '';
   }
-
-  // ---- Utilities ----
 
   private ensureNotCancelled() {
     if (this.abortController?.signal.aborted) throw new Error('Request cancelled');
-  }
-
-  private maybeParseJson(v: unknown): unknown {
-    if (typeof v === 'string') {
-      const s = v.trim();
-      if ((s.startsWith('{') && s.endsWith('}')) || (s.startsWith('[') && s.endsWith(']'))) {
-        try { return JSON.parse(s); } catch { /* ignore */ }
-      }
-    }
-    return v;
   }
 
   private safeString(v: unknown): string {
@@ -419,19 +276,50 @@ export class Orchestrator {
     return `## ${title}\n${text}`;
   }
 
-  // private stepError(stage: string, err: unknown): string {
-  //   const msg = err instanceof Error ? err.message : String(err);
-  //   return `## ${stage} Error\n${msg}`;
-  // }
   private stepError(stage: string, err: unknown): string {
-  const msg = err instanceof Error ? err.message : String(err);
-  // normalize a couple of common cases
-  if (/timed out/i.test(msg)) {
-    return `## ${stage} Timeout\nPlanner call exceeded timeout. You can increase "vysor.requestTimeoutMs" in Settings or try again.`;
+    const msg = err instanceof Error ? err.message : String(err);
+    if (/timed out/i.test(msg)) {
+      return `## ${stage} Timeout\nPlanner call exceeded timeout. You can increase "vysor.requestTimeoutMs" in Settings or try again.`;
+    }
+    if (/cancelled by user/i.test(msg)) {
+      return `## ${stage}\nStopped by user.`;
+    }
+    return `## ${stage} Error\n${msg}`;
   }
-  if (/cancelled by user/i.test(msg)) {
-    return `## ${stage}\nStopped by user.`;
+
+  // ---- Directory tree (safe) ----
+  private async safeDirTree(): Promise<string> {
+    try {
+      const ws = this.fileTools.getWorkspacePath();
+      return (await this.fileTools.generateDirectoryStructure(ws)).trimEnd();
+    } catch (e) {
+      return `<<error generating workspace tree: ${String(e)}>>`;
+    }
   }
-  return `## ${stage} Error\n${msg}`;
+
+  // ---- Blocks for the strict trajectory ----
+
+  private buildMiscBlock(context?: string): string {
+    const ctx = (context || '').trim();
+    if (!ctx) return '';
+    // Pass-through typed DOC/CODE blocks if provided
+    return ['<<<CONTEXT:MISC>>>', ctx, '<<<END CONTEXT:MISC>>>'].join('\n');
+  }
+
+  private startHop(hopNo: number, query: string, dirTree: string, miscBlock?: string): string {
+    return [
+      `<<<HOP #${hopNo}>>>`,
+      `<<<QUERY>>>${(query || '').trim()}<<<END QUERY>>>`,
+      `<<<CONTEXT:DIR name="workspace">>`,
+      dirTree.trimEnd(),
+      `<<<END CONTEXT:DIR>>>`,
+      miscBlock ? miscBlock : '',
+      ''
+    ].filter(Boolean).join('\n');
+  }
+
+  private block(tag: 'THOUGHTS' | 'TOOL SELECTION' | 'TOOL ARGUMENTS' | 'TOOL EXECUTION RESULT', body: unknown): string {
+    const text = typeof body === 'string' ? body : this.raw(body);
+    return [`<<<${tag}>>>`, text, `<<<END ${tag}>>>`, ''].join('\n');
   }
 }

@@ -35,12 +35,16 @@ export class FileOperationTools {
 
       // Reasoning tools
       if (lower === 'simple_query') {
-        return typeof toolOutput?.answer === 'string' ? toolOutput.answer : this.safeString(toolOutput);
+        const ans = typeof toolOutput?.answer === 'string' ? toolOutput.answer : '';
+        const fin = typeof toolOutput?.final_answer === 'string' ? (toolOutput as any).final_answer : '';
+        const text = (ans || fin || (typeof toolOutput === 'string' ? toolOutput : '')).trim();
+        // Avoid dumping raw JSON when the model emitted empty fields
+        return text || '(no answer produced)';
       }
       if (lower === 'final_answer') {
-        return typeof toolOutput?.final_answer === 'string'
-          ? toolOutput.final_answer
-          : this.safeString(toolOutput);
+        const fin = typeof toolOutput?.final_answer === 'string' ? toolOutput.final_answer : '';
+        const text = (fin || (typeof toolOutput === 'string' ? toolOutput : '')).trim();
+        return text || '(no answer produced)';
       }
 
       switch (lower) {
@@ -338,7 +342,17 @@ export class FileOperationTools {
 
   isFinalResponse(toolName: string, toolOutput: any): boolean {
     const t = (toolName || '').toLowerCase();
-    if (t === 'simple_query' || t === 'final_answer') return true;
+    if (t === 'simple_query') {
+      const ans = typeof toolOutput?.answer === 'string' ? toolOutput.answer : '';
+      const fin = typeof toolOutput?.final_answer === 'string' ? toolOutput.final_answer : '';
+      const text = (ans || fin || (typeof toolOutput === 'string' ? toolOutput : '')).trim();
+      return text.length > 0;
+    }
+    if (t === 'final_answer') {
+      const fin = typeof toolOutput?.final_answer === 'string' ? toolOutput.final_answer : '';
+      const text = (fin || (typeof toolOutput === 'string' ? toolOutput : '')).trim();
+      return text.length > 0;
+    }
     const finals = new Set(['respond', 'final_response', 'complete']);
     if (finals.has(t)) return true;
     if (toolOutput && typeof toolOutput === 'object' && (toolOutput as any).final === true) return true;

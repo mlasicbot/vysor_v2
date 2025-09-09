@@ -253,7 +253,7 @@ onMessage((msg: ExtensionInbound) => {
     const name = path.slice(7);
     const mime = msg.mime || 'application/octet-stream';
     state.contextBlobs.push(
-      `<<<DOC name="${name.replace(/"/g,'\\"')}" mime="${mime}">>\n${content}\n<<<END DOC>>>`
+      `<<<DOC name="${name.replace(/"/g,'\\"')}" mime="${mime}">>>\n${content}\n<<<END DOC>>>`
     );
     // const name = path.replace(/^ATTACH:/, '');
     // state.contextBlobs.push(

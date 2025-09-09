@@ -6,7 +6,6 @@ import { Orchestrator } from '../core/orchestrator';
 
 type MentionItem = { path: string; name: string; kind: 'file'|'dir' };
 type Turn = { q: string; r: string; trace?: string[]; at: number };
-// type Session = { id: string; title: string; turns: Turn[]; createdAt: number };
 type Session = { id: string; title: string; turns: Turn[]; createdAt: number; stickyContext?: string[] };
 
 type WebviewMsg =
@@ -78,8 +77,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           this.orchestrator.stopGeneration(); return;
 
         case 'UPLOAD/FILE': {
-  return this.handleUploadFile(msg.sessionId, msg.name, msg.mime, msg.dataBase64);
-}
+          return this.handleUploadFile(msg.sessionId, msg.name, msg.mime, msg.dataBase64);
+        }
         case 'MENTION/QUERY':       return this.mentionQuery(msg.q);
         case 'MENTION/LIST_DIR':    return this.listDir(msg.path);
         case 'MENTION/READ_FILE':   return this.readFile(msg.path);
@@ -98,141 +97,90 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       this.post({ type: 'CHAT/ERROR', message: String(e?.message || e) });
     }
   }
-
+  
   // ---------- chat run ----------
-  // private async runChat(sessionId: string, prompt: string, blobs: string[], titleHint: string) {
-  //   const runId = this.id();
-  //   this.post({ type: 'CHAT/STREAM_START', runId, sessionId });
+  private async runChat(sessionId: string, prompt: string, blobs: string[], titleHint: string) {
+    const runId = this.id();
+    this.post({ type: 'CHAT/STREAM_START', runId, sessionId });
 
-  //   const history = this.getHistory();
-  //   const session = history.find(s => s.id === sessionId) ?? this.ensureSession(history);
-  //   const previous = session.turns.map(t => `Q: ${t.q}\nR: ${t.r}`).join('\n\n');
+    const history = this.getHistory();
+    const session = history.find(s => s.id === sessionId) ?? this.ensureSession(history);
+    const previous = session.turns.map(t => `Q: ${t.q}\nR: ${t.r}`).join('\n\n');
 
-  //   const sticky = (session.stickyContext ?? []).join('\n\n');
+    const blobSet = new Set<string>((blobs || []).map(b => b.trim()));
+    const dedupBlobs = [...blobSet];
 
-  //   const blobSet = new Set<string>((blobs || []).map(b => b.trim()));
-  //   const stickySet = new Set<string>(sticky ? [sticky.trim()] : []);
-  //   const dedupBlobs = [...blobSet].filter(b => !stickySet.has(b));
+    const context = [previous, ...dedupBlobs].filter(Boolean).join('\n\n');
 
-  //   const context = [previous, sticky, ...dedupBlobs].filter(Boolean).join('\n\n');
-  //   // const context = [previous, sticky, ...(blobs || [])].filter(Boolean).join('\n\n');
-  //   // const context = [previous, ...(blobs || [])].filter(Boolean).join('\n\n');
-
-  //   const trace: string[] = [];
-  //   const onProgress = (text: string) => {
-  //     this.post({ type:'CHAT/STREAM_DELTA', runId, text });
-  //     this.post({ type:'TRACE/ENTRY', runId, entry: text });
-  //     trace.push(text);
-  //   };
-
-  //   let finalText = '';
-  //   try {
-  //     finalText = await this.orchestrator.processQuery({ query: prompt, context }, onProgress);
-  //   } catch (e:any) {
-  //     this.post({ type:'CHAT/ERROR', runId, message: String(e?.message || e) });
-  //   } finally {
-  //     session.turns.push({ q: prompt, r: finalText, trace, at: Date.now() });
-  //     if (session.turns.length === 1 && titleHint) session.title = titleHint;
-  //     await this.saveHistory(history);
-  //     this.post({ type:'CHAT/STREAM_END', runId, ok:true });
-  //     this.postHistory();
-  //   }
-  // }
-  // ---------- chat run ----------
-private async runChat(sessionId: string, prompt: string, blobs: string[], titleHint: string) {
-  const runId = this.id();
-  this.post({ type: 'CHAT/STREAM_START', runId, sessionId });
-
-  const history = this.getHistory();
-  const session = history.find(s => s.id === sessionId) ?? this.ensureSession(history);
-  const previous = session.turns.map(t => `Q: ${t.q}\nR: ${t.r}`).join('\n\n');
-
-  const sticky = (session.stickyContext ?? []).join('\n\n');
-  const usedSticky = sticky.trim().length > 0;             // <— track whether we sent legacy sticky this hop
-
-  const blobSet = new Set<string>((blobs || []).map(b => b.trim()));
-  const stickySet = new Set<string>(sticky ? [sticky.trim()] : []);
-  const dedupBlobs = [...blobSet].filter(b => !stickySet.has(b));
-
-  const context = [previous, sticky, ...dedupBlobs].filter(Boolean).join('\n\n');
-
-  const trace: string[] = [];
-  const onProgress = (text: string) => {
-    this.post({ type:'CHAT/STREAM_DELTA', runId, text });
-    this.post({ type:'TRACE/ENTRY', runId, entry: text });
-    trace.push(text);
-  };
-
-  const hopIndex = session.turns.length + 1;
-  const hopHeader = this.buildStructuredHopHeader({ runId, sessionId, hopIndex, prompt, context });
-  this.post({ type:'TRACE/ENTRY', runId, entry: hopHeader });
-  trace.push(hopHeader);
-
-  let finalText = '';
-  let wasStopped = false;
-
-  try {
-    finalText = await this.orchestrator.processQuery(
-      { query: prompt, context, hopIndex },
-      onProgress
-    );
-  } catch (e:any) {
-    const msg = String(e?.message || e);
-    if (/cancelled|canceled|Request cancelled/i.test(msg)) {
-      wasStopped = true;
-      this.post({ type:'CHAT/STREAM_END', runId, ok:false, stopped:true });
-      return;
-    }
-    this.post({ type:'CHAT/ERROR', runId, message: msg });
-    return;
-  } finally {
-    if (!wasStopped) {
-      // ✅ One-shot behavior for any legacy stickyContext:
-      // Only clear if we actually used it *and* we produced a response.
-      if (usedSticky && finalText.trim()) {
-        session.stickyContext = [];
+    const trace: string[] = [];
+    const onProgress = (text: string) => {
+      // Suppress heavy/structured blocks & Tool Args from the live bubble
+      const suppressLive =
+        /^\s*##\s*Hop Context\b/i.test(text) ||
+        /<<<HOP\b/.test(text) ||
+        /^\s*##\s*Tool Args\b/i.test(text);
+      if (!suppressLive) {
+        this.post({ type: 'CHAT/STREAM_DELTA', runId, text });
       }
+      this.post({ type:'TRACE/ENTRY', runId, entry: text });
+      trace.push(text);
+    };
 
-      session.turns.push({ q: prompt, r: finalText, trace, at: Date.now() });
-      if (session.turns.length === 1 && titleHint) session.title = titleHint;
-      await this.saveHistory(history);
-      this.post({ type:'CHAT/STREAM_END', runId, ok:true });
-      this.postHistory();
+    let finalText = '';
+    let wasStopped = false;
+
+    try {
+      finalText = await this.orchestrator.processQuery(
+        { query: prompt, context },
+        onProgress
+      );
+    } catch (e:any) {
+      const msg = String(e?.message || e);
+      if (/cancelled|canceled|Request cancelled/i.test(msg)) {
+        wasStopped = true;
+        this.post({ type:'CHAT/STREAM_END', runId, ok:false, stopped:true });
+        return;
+      }
+      this.post({ type:'CHAT/ERROR', runId, message: msg });
+      return;
+    } finally {
+      if (!wasStopped) {
+        session.turns.push({ q: prompt, r: finalText, trace, at: Date.now() });
+        if (session.turns.length === 1 && titleHint) session.title = titleHint;
+        await this.saveHistory(history);
+        this.post({ type:'CHAT/STREAM_END', runId, ok:true });
+        this.postHistory();
+      }
     }
   }
-}
-
-
-
 
   // ---------- history ----------
   private getHistory(): Session[] { return (this.context.globalState.get(this.HISTORY_KEY) as Session[]) || []; }
   private async saveHistory(h: Session[]) { await this.context.globalState.update(this.HISTORY_KEY, h); }
   private async postHistory(){ const h = this.getHistory(); this.post({ type:'HISTORY/LOAD_OK', history: h, focus: h[0]?.id }); }
-  // private async createSession(){ const h=this.getHistory(); h.unshift({ id:this.id(), title:'New chat', turns:[], createdAt:Date.now() }); await this.saveHistory(h); }
+
   private async createSession(){
-  const h = this.getHistory();
-  const s: Session = { id: this.id(), title: 'New chat', turns: [], createdAt: Date.now(), stickyContext: [] };
-  h.unshift(s);
-  await this.saveHistory(h);
-}
+    const h = this.getHistory();
+    const s: Session = { id: this.id(), title: 'New chat', turns: [], createdAt: Date.now(), stickyContext: [] };
+    h.unshift(s);
+    await this.saveHistory(h);
+  }
   private async renameSession(id:string, title:string){ const h=this.getHistory(); const i=h.findIndex(s=>s.id===id); if(i>=0) h[i].title=title; await this.saveHistory(h); }
   private async deleteSession(id:string){ await this.saveHistory(this.getHistory().filter(s=>s.id!==id)); }
-  // private ensureSession(h: Session[]){ if(!h.length){ const s={ id:this.id(), title:'New chat', turns:[], createdAt:Date.now() }; h.unshift(s); return s; } return h[0]; }
   private ensureSession(h: Session[]): Session {
-  if (!h.length) {
-    const s: Session = {
-      id: this.id(),
-      title: 'New chat',
-      turns: [],
-      createdAt: Date.now(),
-      stickyContext: [],
-    };
-    h.unshift(s);
-    return s;
+    if (!h.length) {
+      const s: Session = {
+        id: this.id(),
+        title: 'New chat',
+        turns: [],
+        createdAt: Date.now(),
+        stickyContext: [],
+      };
+      h.unshift(s);
+      return s;
+    }
+    return h[0];
   }
-  return h[0];
-}
 
   // ---------- mentions ----------
   private async mentionQuery(q: string) {
@@ -254,12 +202,6 @@ private async runChat(sessionId: string, prompt: string, blobs: string[], titleH
     const out: MentionItem[] = entries.map(([name, k]) => ({ path: vscode.Uri.joinPath(base, name).fsPath, name, kind: k===vscode.FileType.Directory?'dir':'file' }));
     this.post({ type:'MENTION/DIR_CONTENTS', base: abs, items: out });
   }
-
-  // private async readFile(abs: string) {
-  //   const buf = await vscode.workspace.fs.readFile(vscode.Uri.file(abs));
-  //   const text = new TextDecoder('utf-8').decode(buf);
-  //   this.post({ type:'MENTION/FILE_CONTENT', path: abs, content: text });
-  // }
   
   private async readFile(abs: string) {
     const buf = await vscode.workspace.fs.readFile(vscode.Uri.file(abs));
@@ -273,7 +215,6 @@ private async runChat(sessionId: string, prompt: string, blobs: string[], titleH
 
     this.post({ type:'MENTION/FILE_CONTENT', path: abs, content: codeBlock });
   }
-
 
   // ---------- HTML ----------
   private html(webview: vscode.Webview) {
@@ -327,225 +268,89 @@ private async runChat(sessionId: string, prompt: string, blobs: string[], titleH
   // ---------- utils ----------
   private post(o:any){ this.view?.webview.postMessage(o); }
   private id(){ return `${Date.now()}-${Math.random().toString(36).slice(2,8)}`; }
+
   private async handleUploadFile(sessionId: string, name: string, mime: string, dataBase64: string) {
-  const startedAt = Date.now();
-  const baseUrl = 'http://127.0.0.1:8889';   // <-- your current setting
-  const useRaw = false;
-  const apiUrl = `${baseUrl}${useRaw ? '/ocr/raw' : '/ocr'}`;
-  
+    const startedAt = Date.now();
+    const baseUrl = 'http://127.0.0.1:8889';
+    const useRaw = false;
+    const apiUrl = `${baseUrl}${useRaw ? '/ocr/raw' : '/ocr'}`;
 
-  try {
-    this.post({ type: 'UPLOAD/START', fileName: name, sessionId });
-    this.log?.info?.('[OCR] start', { sessionId, name, mime, baseUrl, apiUrl });
-
-    // quick env probe
-    // @ts-ignore
-    const envProbe = { hasFetch: !!globalThis.fetch, hasFormData: !!globalThis.FormData, hasBlob: !!globalThis.Blob };
-    this.log?.info?.('[OCR] env', envProbe);
-
-    // health check (helps catch localhost/namespace issues)
     try {
-      const h = await fetch(`${baseUrl}/health`, { method: 'GET' });
-      this.log?.info?.('[OCR] health', { ok: h.ok, status: h.status });
-    } catch (e) {
-      this.log?.error?.('[OCR] health check failed', e);
+      this.post({ type: 'UPLOAD/START', fileName: name, sessionId });
+      this.log?.info?.('[OCR] start', { sessionId, name, mime, baseUrl, apiUrl });
+
+      // quick env probe
+      // @ts-ignore
+      const envProbe = { hasFetch: !!globalThis.fetch, hasFormData: !!globalThis.FormData, hasBlob: !!globalThis.Blob };
+      this.log?.info?.('[OCR] env', envProbe);
+
+      // health check
+      try {
+        const h = await fetch(`${baseUrl}/health`, { method: 'GET' });
+        this.log?.info?.('[OCR] health', { ok: h.ok, status: h.status });
+      } catch (e) {
+        this.log?.error?.('[OCR] health check failed', e);
+      }
+
+      // build form
+      const bin = Buffer.from(dataBase64, 'base64');
+      const form = new FormData();
+      const blob = new Blob([bin], { type: mime || 'application/octet-stream' });
+      form.append('file', blob, name);
+      this.log?.info?.('[OCR] form built', { bytes: bin.byteLength });
+
+      // POST
+      const controller = new AbortController();
+      const t = setTimeout(() => controller.abort(), 600_000); // 10 min
+      let res: Response;
+      try {
+        res = await fetch(apiUrl, { method: 'POST', body: form as any, signal: controller.signal });
+      } finally {
+        clearTimeout(t);
+      }
+
+      const headersObj: Record<string, string> = {};
+      res.headers.forEach((v, k) => { headersObj[k] = v; });
+      this.log?.info?.('[OCR] response', { ok: res.ok, status: res.status, headers: headersObj });
+
+      const raw = await res.text();
+      this.log?.info?.('[OCR] raw-length', { len: raw.length });
+      this.log?.info?.('[OCR] raw-preview', raw.slice(0, 300));
+
+      if (!res.ok) throw new Error(`OCR failed (${res.status})`);
+
+      // parse or pass-through
+      let markdown: string;
+      try {
+        const parsed = raw ? JSON.parse(raw) as { markdown?: unknown } : {};
+        markdown = (parsed && typeof parsed.markdown === 'string') ? parsed.markdown : raw;
+      } catch {
+        markdown = raw;
+      }
+
+      // persist as stickyContext (history only)
+      const h = this.getHistory();
+      const s = h.find(x => x.id === sessionId) ?? this.ensureSession(h);
+      s.stickyContext = s.stickyContext ?? [];
+
+      const docBlock = [
+        `<<<DOC name="${name.replace(/"/g,'\\"')}" mime="${mime || 'application/octet-stream'}">>>`,
+        markdown,
+        `<<<END DOC>>>`
+      ].join('\n');
+
+      s.stickyContext!.push(docBlock);
+      await this.saveHistory(h);
+      this.log?.info?.('[OCR] stickyContext appended', { sessionId, addBytes: markdown.length, elapsedMs: Date.now() - startedAt });
+
+      // notify UI
+      this.post({ type: 'UPLOAD/SUCCESS', fileName: name, sessionId });
+      this.post({ type: 'MENTION/FILE_CONTENT', path: `ATTACH:${name}`, content: markdown, mime });
+
+    } catch (e: any) {
+      this.log?.error?.('[OCR] error', { message: String(e?.message || e), elapsedMs: Date.now() - startedAt });
+      this.post({ type: 'UPLOAD/ERROR', fileName: name, sessionId, message: String(e?.message || e) });
+      this.post({ type: 'CHAT/ERROR', message: `Attach/OCR error: ${String(e?.message || e)}` });
     }
-
-    // build form
-    const bin = Buffer.from(dataBase64, 'base64');
-    const form = new FormData();
-    const blob = new Blob([bin], { type: mime || 'application/octet-stream' });
-    form.append('file', blob, name);
-    this.log?.info?.('[OCR] form built', { bytes: bin.byteLength });
-
-    // POST
-    const controller = new AbortController();
-    const t = setTimeout(() => controller.abort(), 600_000); // 10 min
-    let res: Response;
-    try {
-      res = await fetch(apiUrl, { method: 'POST', body: form as any, signal: controller.signal });
-    } finally {
-      clearTimeout(t);
-    }
-    // this.log?.info?.('[OCR] response', { ok: res.ok, status: res.status, headers: Object.fromEntries(res.headers.entries()) });
-
-    const headersObj: Record<string, string> = {};
-    res.headers.forEach((v, k) => { headersObj[k] = v; });
-    this.log?.info?.('[OCR] response', { ok: res.ok, status: res.status, headers: headersObj });
-
-    const raw = await res.text();
-    this.log?.info?.('[OCR] raw-length', { len: raw.length });
-    this.log?.info?.('[OCR] raw-preview', raw.slice(0, 300));
-
-    if (!res.ok) throw new Error(`OCR failed (${res.status})`);
-
-    // parse or pass-through
-    let markdown: string;
-    try {
-      const parsed = raw ? JSON.parse(raw) as { markdown?: unknown } : {};
-      markdown = (parsed && typeof parsed.markdown === 'string') ? parsed.markdown : raw;
-    } catch {
-      markdown = raw;
-    }
-
-    // inside handleUploadFile, after you compute `markdown`:
-    const h = this.getHistory();
-    const s = h.find(x => x.id === sessionId) ?? this.ensureSession(h);
-    s.stickyContext = s.stickyContext ?? [];
-
-    const docBlock = [
-      `<<<DOC name="${name.replace(/"/g,'\\"')}" mime="${mime || 'application/octet-stream'}">>`,
-      markdown,
-      `<<<END DOC>>>`
-    ].join('\n');
-
-    // push EXACTLY the docBlock (note the >>>)
-    // s.stickyContext.push(docBlock);
-    await this.saveHistory(h);
-
-
-    // persist into stickyContext
-    // persist into stickyContext (typed, reconstructable)
-//     const h = this.getHistory();
-//     const s = h.find(x => x.id === sessionId) ?? this.ensureSession(h);
-//     s.stickyContext = s.stickyContext ?? [];
-//     const docBlock = [
-//       `<<<DOC name="${name.replace(/"/g,'\\"')}" mime="${mime || 'application/octet-stream'}">>>`,
-//       markdown,
-//       `<<<END DOC>>>`
-//     ].join('\n');
-//     // s.stickyContext.push(docBlock);
-//     s.stickyContext.push(
-//    `<<<DOC name="${name}" mime="${mime || 'application/octet-stream'}">>\n${markdown}\n<<<END DOC>>>`
-//  );
-
-//     await this.saveHistory(h);
-
-    // const h = this.getHistory();
-    // const s = h.find(x => x.id === sessionId) ?? this.ensureSession(h);
-    // s.stickyContext = s.stickyContext ?? [];
-    // s.stickyContext.push(`FILE: ${name}\n\n${markdown}`);
-    // await this.saveHistory(h);
-    this.log?.info?.('[OCR] stickyContext appended', { sessionId, addBytes: markdown.length, elapsedMs: Date.now() - startedAt });
-
-    // notify UI
-    this.post({ type: 'UPLOAD/SUCCESS', fileName: name, sessionId });
-    // optional one-shot injection still ok if you keep it:
-    this.post({ type: 'MENTION/FILE_CONTENT', path: `ATTACH:${name}`, content: markdown, mime });
-
-  } catch (e: any) {
-    this.log?.error?.('[OCR] error', { message: String(e?.message || e), elapsedMs: Date.now() - startedAt });
-    // show banner error too
-    this.post({ type: 'UPLOAD/ERROR', fileName: name, sessionId, message: String(e?.message || e) });
-    // and bubble to chat error UI (existing behavior)
-    this.post({ type: 'CHAT/ERROR', message: `Attach/OCR error: ${String(e?.message || e)}` });
   }
-
-  
 }
-//   private async handleUploadFile(sessionId: string, name: string, mime: string, dataBase64: string) {
-//     try {
-//       // Config (you can move these to settings later)
-//       this.post({ type: 'UPLOAD/START', fileName: name, sessionId });
-//       this.log?.info?.('[OCR] start', { sessionId, name, mime, baseUrl, apiUrl });
-
-
-//       const BASE_URL = 'http://127.0.0.1:8889';
-//       const USE_RAW_ENDPOINT = false;
-//       const API_URL = `${BASE_URL}${USE_RAW_ENDPOINT ? '/ocr/raw' : '/ocr'}`;
-
-//       // Build multipart form using Node 18+ fetch + FormData + Blob
-//       const bin = Buffer.from(dataBase64, 'base64');
-//       const form = new FormData();
-//       const blob = new Blob([bin], { type: mime || 'application/octet-stream' });
-//       form.append('file', blob, name);
-
-//       const controller = new AbortController();
-//       const t = setTimeout(() => controller.abort(), 600_000);
-
-//       const res = await fetch(API_URL, {
-//         method: 'POST',
-//         body: form as any,
-//         signal: controller.signal,
-//       }).finally(() => clearTimeout(t));
-
-//       if (!res.ok) {
-//         const msg = await res.text();
-//         throw new Error(`OCR failed (${res.status}): ${msg.slice(0, 500)}`);
-//       }
-
-//       // Expect {"markdown": "..."} when /ocr is used
-//       // const data = await res.json().catch(() => ({}));
-//       // const markdown: string =
-//       //   (data && typeof data.markdown === 'string') ? data.markdown :
-//       //   // fallback: try text if raw endpoint was used
-//       //   (typeof data === 'string' ? data : JSON.stringify(data, null, 2));
-//       // Expect either JSON: { markdown: string }  (for /ocr)
-// // or raw text/markdown (for /ocr/raw). Read as text first, then parse safely.
-//       const raw = await res.text();
-
-//       let markdown: string;
-//       try {
-//         const parsed = raw ? JSON.parse(raw) as { markdown?: unknown } : {};
-//         if (parsed && typeof parsed.markdown === 'string') {
-//           markdown = parsed.markdown;
-//         } else {
-//           // If JSON but no markdown field, fall back to pretty JSON
-//           // (or raw text if it wasn't JSON)
-//           markdown = raw;
-//         }
-//       } catch {
-//         // Not JSON -> raw endpoint returns plain text/markdown
-//         markdown = raw;
-//       }
-
-//       // Persist sticky context to the session
-//       const h = this.getHistory();
-//       const s = h.find(x => x.id === sessionId) ?? this.ensureSession(h);
-//       s.stickyContext = s.stickyContext ?? [];
-//       s.stickyContext.push(`FILE: ${name}\n\n${markdown}`);
-//       await this.saveHistory(h);
-
-//       // Tell UI it's available (also lets app.ts push a one-shot blob if you still want the “next first query” behavior)
-//       this.post({ type: 'UPLOAD/SUCCESS', fileName: name, sessionId });
-
-//       // (Optional) If you still want the “immediate next query” to carry it *even if* the user switches sessions,
-//       // you can also keep the existing behavior of pushing a one-shot context blob:
-//       this.post({ type: 'MENTION/FILE_CONTENT', path: `ATTACH:${name}`, content: markdown });
-
-//     } catch (e: any) {
-//       this.post({ type: 'CHAT/ERROR', message: `Attach/OCR error: ${String(e?.message || e)}` });
-//     }
-//   }
-
-  private buildStructuredHopHeader(params: { runId: string; sessionId: string; hopIndex: number; prompt: string; context: string }) {
-  const { runId, sessionId, hopIndex, prompt, context } = params;
-  const ts = new Date().toISOString();
-
-  // Pass through any <<DOC ...>> / <<CODE ...>> blocks already present in `context`.
-  // If none exist, we wrap the raw context into a generic MISC block.
-  const hasTypedBlocks = /<<<(DOC|CODE)\b/.test(context);
-  const miscWrapped = hasTypedBlocks ? '' : [`<<<CONTEXT:MISC>>>`, context, `<<<END CONTEXT:MISC>>>`].join('\n');
-
-  // If typed blocks exist, keep them; otherwise use miscWrapped
-  const typedPart = hasTypedBlocks ? context : miscWrapped;
-
-  return [
-    `<<<HOP id="${runId}" session="${sessionId}" n=${hopIndex} ts="${ts}">>>`,
-    `<<<QUERY>>>`,
-    prompt,
-    `<<<END QUERY>>>`,
-    // Directory structure will be injected by Orchestrator (so it stays in one place)
-    `<<<CONTEXT:DIR>>> (will be appended by server) <<<END CONTEXT:DIR>>>`,
-    typedPart,
-    `<<<RESPONSE>>>`,
-    `<<<END RESPONSE>>>`,
-    `<<<END HOP>>>`
-  ].join('\n');
-}
-}
-
-
-
-
-  
