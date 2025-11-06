@@ -271,86 +271,208 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   private async handleUploadFile(sessionId: string, name: string, mime: string, dataBase64: string) {
     const startedAt = Date.now();
-    const baseUrl = 'http://127.0.0.1:8889';
+    const cfg = (globalThis as any).vscodeConfig ?? undefined;
+    // Prefer extension settings; fall back to ConfigManager if available
+    // @ts-ignore - ConfigManager imported at top may not exist in this scope depending on build; we use require dynamically
+    let baseUrl = 'http://127.0.0.1:8889';
+    try {
+    // try ConfigManager if available
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const cfgMgr = require('../utils/config').ConfigManager;
+    baseUrl = cfgMgr.getInstance().getConfig().ocrBaseUrl || baseUrl;
+    } catch {
+    try { baseUrl = (this.context as any)?.workspaceState?.get?.('vysor.ocrBaseUrl') || baseUrl; } catch { /* ignore */ }
+    }
     const useRaw = false;
     const apiUrl = `${baseUrl}${useRaw ? '/ocr/raw' : '/ocr'}`;
-
+    
     try {
-      this.post({ type: 'UPLOAD/START', fileName: name, sessionId });
-      this.log?.info?.('[OCR] start', { sessionId, name, mime, baseUrl, apiUrl });
-
-      // quick env probe
-      // @ts-ignore
-      const envProbe = { hasFetch: !!globalThis.fetch, hasFormData: !!globalThis.FormData, hasBlob: !!globalThis.Blob };
-      this.log?.info?.('[OCR] env', envProbe);
-
-      // health check
-      try {
-        const h = await fetch(`${baseUrl}/health`, { method: 'GET' });
-        this.log?.info?.('[OCR] health', { ok: h.ok, status: h.status });
-      } catch (e) {
-        this.log?.error?.('[OCR] health check failed', e);
-      }
-
-      // build form
-      const bin = Buffer.from(dataBase64, 'base64');
-      const form = new FormData();
-      const blob = new Blob([bin], { type: mime || 'application/octet-stream' });
-      form.append('file', blob, name);
-      this.log?.info?.('[OCR] form built', { bytes: bin.byteLength });
-
-      // POST
-      const controller = new AbortController();
-      const t = setTimeout(() => controller.abort(), 600_000); // 10 min
-      let res: Response;
-      try {
-        res = await fetch(apiUrl, { method: 'POST', body: form as any, signal: controller.signal });
-      } finally {
-        clearTimeout(t);
-      }
-
-      const headersObj: Record<string, string> = {};
-      res.headers.forEach((v, k) => { headersObj[k] = v; });
-      this.log?.info?.('[OCR] response', { ok: res.ok, status: res.status, headers: headersObj });
-
-      const raw = await res.text();
-      this.log?.info?.('[OCR] raw-length', { len: raw.length });
-      this.log?.info?.('[OCR] raw-preview', raw.slice(0, 300));
-
-      if (!res.ok) throw new Error(`OCR failed (${res.status})`);
-
-      // parse or pass-through
-      let markdown: string;
-      try {
-        const parsed = raw ? JSON.parse(raw) as { markdown?: unknown } : {};
-        markdown = (parsed && typeof parsed.markdown === 'string') ? parsed.markdown : raw;
-      } catch {
-        markdown = raw;
-      }
-
-      // persist as stickyContext (history only)
-      const h = this.getHistory();
-      const s = h.find(x => x.id === sessionId) ?? this.ensureSession(h);
-      s.stickyContext = s.stickyContext ?? [];
-
-      const docBlock = [
-        `<<<DOC name="${name.replace(/"/g,'\\"')}" mime="${mime || 'application/octet-stream'}">>>`,
-        markdown,
-        `<<<END DOC>>>`
-      ].join('\n');
-
-      s.stickyContext!.push(docBlock);
-      await this.saveHistory(h);
-      this.log?.info?.('[OCR] stickyContext appended', { sessionId, addBytes: markdown.length, elapsedMs: Date.now() - startedAt });
-
-      // notify UI
-      this.post({ type: 'UPLOAD/SUCCESS', fileName: name, sessionId });
-      this.post({ type: 'MENTION/FILE_CONTENT', path: `ATTACH:${name}`, content: markdown, mime });
-
+    this.post({ type: 'UPLOAD/START', fileName: name, sessionId });
+    this.log?.info?.('[OCR] start', { sessionId, name, mime, baseUrl, apiUrl });
+    
+    const envProbe = { hasFetch: !!(globalThis as any).fetch, hasFormData: !!(globalThis as any).FormData, hasBlob: !!(globalThis as any).Blob };
+    this.log?.info?.('[OCR] env', envProbe);
+    
+    const bin = Buffer.from(dataBase64, 'base64');
+    
+    // Prefer native fetch+FormData+Blob (webview browsers / Node18+)
+    if (envProbe.hasFetch && envProbe.hasFormData && envProbe.hasBlob) {
+    try {
+    const form = new (globalThis as any).FormData();
+    const blob = new (globalThis as any).Blob([bin], { type: mime || 'application/octet-stream' });
+    form.append('file', blob, name);
+    this.log?.info?.('[OCR] using native fetch+FormData', { bytes: bin.byteLength });
+    
+    const controller = new AbortController();
+    const t = setTimeout(() => controller.abort(), 600_000);
+    let res: Response;
+    try {
+    res = await (globalThis as any).fetch(apiUrl, { method: 'POST', body: form as any, signal: controller.signal });
+    } finally {
+    clearTimeout(t);
+    }
+    
+    const raw = await res.text();
+    if (!res.ok) throw new Error(`OCR failed (${res.status})`);
+    let markdown: string;
+    try { const parsed = raw ? JSON.parse(raw) as { markdown?: unknown } : {}; markdown = (parsed && typeof parsed.markdown === 'string') ? parsed.markdown : raw; }
+    catch { markdown = raw; }
+    
+    const h = this.getHistory();
+    const s = h.find(x => x.id === sessionId) ?? this.ensureSession(h);
+    s.stickyContext = s.stickyContext ?? [];
+    const docBlock = [
+    `<<<DOC name="${name.replace(/"/g,'\\"')}" mime="${mime || 'application/octet-stream'}">>>`,
+    markdown,
+    `<<<END DOC>>>`
+    ].join('\n');
+    s.stickyContext!.push(docBlock);
+    await this.saveHistory(h);
+    
+    this.post({ type: 'UPLOAD/SUCCESS', fileName: name, sessionId });
+    this.post({ type: 'MENTION/FILE_CONTENT', path: `ATTACH:${name}`, content: markdown, mime });
+    this.log?.info?.('[OCR] success (fetch)', { sessionId, bytes: bin.byteLength, elapsedMs: Date.now() - startedAt });
+    return;
+    } catch (e) {
+    this.log?.error?.('[OCR] fetch+FormData path failed, falling back to axios', e);
+    }
+    }
+    
+    // Fallback to axios form-data (Node/Electron runtimes)
+    try {
+    // dynamic require so packaging doesn't break
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const Axios = require('axios');
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const FormData = require('form-data');
+    const form = new FormData();
+    form.append('file', bin, { filename: name, contentType: mime || 'application/octet-stream' });
+    
+    const headers = form.getHeaders ? form.getHeaders() : { 'Content-Type': 'multipart/form-data' };
+    this.log?.info?.('[OCR] using axios+form-data', { bytes: bin.byteLength });
+    
+    const res = await Axios.post(apiUrl, form, {
+    headers,
+    timeout: 600_000,
+    maxContentLength: Infinity,
+    maxBodyLength: Infinity,
+    });
+    
+    const raw = typeof res.data === 'string' ? res.data : JSON.stringify(res.data);
+    if (res.status < 200 || res.status >= 300) throw new Error(`OCR failed (${res.status})`);
+    
+    let markdown: string;
+    try { const parsed = raw ? JSON.parse(raw) as { markdown?: unknown } : {}; markdown = (parsed && typeof parsed.markdown === 'string') ? parsed.markdown : raw; }
+    catch { markdown = raw; }
+    
+    const h = this.getHistory();
+    const s = h.find(x => x.id === sessionId) ?? this.ensureSession(h);
+    s.stickyContext = s.stickyContext ?? [];
+    const docBlock = [
+    `<<<DOC name="${name.replace(/"/g,'\\"')}" mime="${mime || 'application/octet-stream'}">>>`,
+    markdown,
+    `<<<END DOC>>>`
+    ].join('\n');
+    s.stickyContext!.push(docBlock);
+    await this.saveHistory(h);
+    
+    this.post({ type: 'UPLOAD/SUCCESS', fileName: name, sessionId });
+    this.post({ type: 'MENTION/FILE_CONTENT', path: `ATTACH:${name}`, content: markdown, mime });
+    this.log?.info?.('[OCR] success (axios)', { sessionId, bytes: bin.byteLength, elapsedMs: Date.now() - startedAt });
+    return;
+    } catch (e) {
+    this.log?.error?.('[OCR] axios path failed', e);
+    throw e;
+    }
     } catch (e: any) {
-      this.log?.error?.('[OCR] error', { message: String(e?.message || e), elapsedMs: Date.now() - startedAt });
-      this.post({ type: 'UPLOAD/ERROR', fileName: name, sessionId, message: String(e?.message || e) });
-      this.post({ type: 'CHAT/ERROR', message: `Attach/OCR error: ${String(e?.message || e)}` });
+    this.log?.error?.('[OCR] error', { message: String(e?.message || e), elapsedMs: Date.now() - startedAt });
+    this.post({ type: 'UPLOAD/ERROR', fileName: name, sessionId, message: String(e?.message || e) });
+    this.post({ type: 'CHAT/ERROR', message: `Attach/OCR error: ${String(e?.message || e)}` });
     }
   }
+
+  // private async handleUploadFile(sessionId: string, name: string, mime: string, dataBase64: string) {
+  //   const startedAt = Date.now();
+  //   const baseUrl = 'http://127.0.0.1:8889';
+  //   const useRaw = false;
+  //   const apiUrl = `${baseUrl}${useRaw ? '/ocr/raw' : '/ocr'}`;
+
+  //   try {
+  //     this.post({ type: 'UPLOAD/START', fileName: name, sessionId });
+  //     this.log?.info?.('[OCR] start', { sessionId, name, mime, baseUrl, apiUrl });
+
+  //     // quick env probe
+  //     // @ts-ignore
+  //     const envProbe = { hasFetch: !!globalThis.fetch, hasFormData: !!globalThis.FormData, hasBlob: !!globalThis.Blob };
+  //     this.log?.info?.('[OCR] env', envProbe);
+
+  //     // health check
+  //     try {
+  //       const h = await fetch(`${baseUrl}/health`, { method: 'GET' });
+  //       this.log?.info?.('[OCR] health', { ok: h.ok, status: h.status });
+  //     } catch (e) {
+  //       this.log?.error?.('[OCR] health check failed', e);
+  //     }
+
+  //     // build form
+  //     const bin = Buffer.from(dataBase64, 'base64');
+  //     const form = new FormData();
+  //     const blob = new Blob([bin], { type: mime || 'application/octet-stream' });
+  //     form.append('file', blob, name);
+  //     this.log?.info?.('[OCR] form built', { bytes: bin.byteLength });
+
+  //     // POST
+  //     const controller = new AbortController();
+  //     const t = setTimeout(() => controller.abort(), 600_000); // 10 min
+  //     let res: Response;
+  //     try {
+  //       res = await fetch(apiUrl, { method: 'POST', body: form as any, signal: controller.signal });
+  //     } finally {
+  //       clearTimeout(t);
+  //     }
+
+  //     const headersObj: Record<string, string> = {};
+  //     res.headers.forEach((v, k) => { headersObj[k] = v; });
+  //     this.log?.info?.('[OCR] response', { ok: res.ok, status: res.status, headers: headersObj });
+
+  //     const raw = await res.text();
+  //     this.log?.info?.('[OCR] raw-length', { len: raw.length });
+  //     this.log?.info?.('[OCR] raw-preview', raw.slice(0, 300));
+
+  //     if (!res.ok) throw new Error(`OCR failed (${res.status})`);
+
+  //     // parse or pass-through
+  //     let markdown: string;
+  //     try {
+  //       const parsed = raw ? JSON.parse(raw) as { markdown?: unknown } : {};
+  //       markdown = (parsed && typeof parsed.markdown === 'string') ? parsed.markdown : raw;
+  //     } catch {
+  //       markdown = raw;
+  //     }
+
+  //     // persist as stickyContext (history only)
+  //     const h = this.getHistory();
+  //     const s = h.find(x => x.id === sessionId) ?? this.ensureSession(h);
+  //     s.stickyContext = s.stickyContext ?? [];
+
+  //     const docBlock = [
+  //       `<<<DOC name="${name.replace(/"/g,'\\"')}" mime="${mime || 'application/octet-stream'}">>>`,
+  //       markdown,
+  //       `<<<END DOC>>>`
+  //     ].join('\n');
+
+  //     s.stickyContext!.push(docBlock);
+  //     await this.saveHistory(h);
+  //     this.log?.info?.('[OCR] stickyContext appended', { sessionId, addBytes: markdown.length, elapsedMs: Date.now() - startedAt });
+
+  //     // notify UI
+  //     this.post({ type: 'UPLOAD/SUCCESS', fileName: name, sessionId });
+  //     this.post({ type: 'MENTION/FILE_CONTENT', path: `ATTACH:${name}`, content: markdown, mime });
+
+  //   } catch (e: any) {
+  //     this.log?.error?.('[OCR] error', { message: String(e?.message || e), elapsedMs: Date.now() - startedAt });
+  //     this.post({ type: 'UPLOAD/ERROR', fileName: name, sessionId, message: String(e?.message || e) });
+  //     this.post({ type: 'CHAT/ERROR', message: `Attach/OCR error: ${String(e?.message || e)}` });
+  //   }
+  // }
 }

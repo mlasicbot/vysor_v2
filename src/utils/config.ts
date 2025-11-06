@@ -6,6 +6,7 @@ import * as vscode from 'vscode';
 export interface VysorConfig {
   // Planner / AI
   plannerBaseUrl: string;
+  ocrBaseUrl?: string;
   maxIterations: number;
   requestTimeoutMs: number;
   modelName: string;
@@ -44,6 +45,7 @@ export class ConfigManager {
     return {
       // Planner / AI
       plannerBaseUrl: c.get<string>('plannerBaseUrl', 'http://localhost:8000'),
+      ocrBaseUrl: c.get<string>('ocrBaseUrl', 'http://127.0.0.1:8889'),
       maxIterations: c.get<number>('maxIterations', 50),
       requestTimeoutMs: c.get<number>('requestTimeoutMs', 120000),
       modelName: c.get<string>('modelName', 'default-model'),

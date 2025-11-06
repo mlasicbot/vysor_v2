@@ -60,6 +60,41 @@ export class Orchestrator {
   isCurrentlyGenerating(): boolean { return this.isGenerating; }
   stopGeneration(): void { if (this.isGenerating && this.abortController) this.abortController.abort(); }
 
+  async generateInlineCompletion(
+    before: string,
+    after: string,
+    languageId: string,
+    signal?: AbortSignal
+  ): Promise<string> {
+    // Compose a compact trajectory/prompt tailored for completions.
+    // Keep it short for low-latency: only send last ~1000 chars before cursor.
+    const maxBefore = 1024;
+    const ctxBefore = before.length > maxBefore ? before.slice(-maxBefore) : before;
+    const ctxAfter = (after || '').slice(0, 512);
+
+    const prompt = [
+      '### TASK: Provide a concise inline completion for the code at the cursor.',
+      `### LANGUAGE: ${languageId}`,
+      '### CONTEXT BEFORE:',
+      ctxBefore,
+      '### CONTEXT AFTER:',
+      ctxAfter,
+      '### INSTRUCTIONS: Return only the text that should be inserted at the cursor (no surrounding commentary). Prefer minimal, syntactically correct completions. Do not repeat existing text before the cursor.'
+    ].join('\n');
+
+    try {
+      const resp = await this.planner.think({ trajectory: prompt }, signal);
+      const out = this.out<string>(resp) ?? '';
+      // Post-process: trim leading whitespace equal to what cursor already has, return first plausible completion
+      const completion = String(out).trim();
+      // Optionally strip code fences or markers
+      return completion.replace(/^```(?:\w+)?\n?/, '').replace(/```$/, '').trim();
+    } catch (e) {
+      // On error, return empty string (quiet failure; provider will show nothing)
+      return '';
+    }
+  }
+
   async processQuery(req: QueryRequest, onProgress?: ProgressCallback): Promise<string> {
     if (this.isGenerating) {
       onProgress?.('Another request is already running. Stop it or wait.', true);

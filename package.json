@@ -16,7 +16,13 @@
   ],
   "main": "./out/extension.js",
   "contributes": {
-    "commands": [],
+  "commands": [
+      {
+        "command": "vysor.testInlineCompletion",
+        "title": "Vysor: Test Inline Completion",
+        "category": "Vysor"
+      }
+        ],
     "viewsContainers": {
       "activitybar": [
         {
@@ -53,6 +59,11 @@
           "type": "number",
           "default": 120000,
           "description": "HTTP request timeout for planner calls (in ms)"
+        },
+         "vysor.ocrBaseUrl": {
+           "type": "string",
+          "default": "http://127.0.0.1:8889",
+          "description": "Base URL for the OCR/ingestion service (used for file uploads)."
         },
         "vysor.networkRetries":  { "type": "number", "default": 1, "description": "Automatic retries for planner HTTP calls." },
         "vysor.networkRetryBackoffMs": { "type": "number", "default": 1500, "description": "Backoff between retries (ms)." },
@@ -100,6 +111,22 @@
           "type": "boolean",
           "default": true,
           "description": "Restrict file operations to the workspace root folder"
+        },
+        "vysor.inlineCompletion.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable inline code completions (editor inline suggestions)."
+        },
+        "vysor.inlineCompletion.mode": {
+          "type": "string",
+          "enum": ["conservative", "aggressive"],
+          "default": "conservative",
+          "description": "Completion mode. 'conservative' shows suggestions only when confident; 'aggressive' shows suggestions more often."
+        },
+        "vysor.inlineCompletion.debounceMs": {
+          "type": "number",
+          "default": 180,
+          "description": "Debounce time (ms) before requesting completion after keystroke."
         }
       }
     }
@@ -133,6 +160,7 @@
     "typescript": "^5.9.2"
   },
   "dependencies": {
-    "axios": "^1.11.0"
+    "axios": "^1.11.0",
+    "form-data": "^4.0.0"
   }
 }

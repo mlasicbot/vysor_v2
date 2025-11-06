@@ -171,10 +171,19 @@ export class Composer extends Component<{
 
 // helpers (place below the class in the same file)
 function arrayBufferToBase64(ab: ArrayBuffer): string {
-  const uint8 = new Uint8Array(ab);
-  let s = '';
-  for (let i = 0; i < uint8.length; i++) s += String.fromCharCode(uint8[i]);
-  return btoa(s);
+  // const uint8 = new Uint8Array(ab);
+  // let s = '';
+  // for (let i = 0; i < uint8.length; i++) s += String.fromCharCode(uint8[i]);
+  // return btoa(s);
+const chunkSize = 0x8000; // 32KB per chunk
+const uint8 = new Uint8Array(ab);
+let result = '';
+for (let i = 0; i < uint8.length; i += chunkSize) {
+  const slice = uint8.subarray(i, Math.min(i + chunkSize, uint8.length));
+  // Array.from here keeps apply/call stack small
+  result += String.fromCharCode.apply(null, Array.from(slice) as any);
+}
+return btoa(result);
 }
 function guessMimeByExt(name: string): string {
   const n = name.toLowerCase();

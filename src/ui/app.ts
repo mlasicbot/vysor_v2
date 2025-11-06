@@ -9,7 +9,9 @@ console.log('Current time:', new Date().toISOString()); // Basic debug
 
 // Try to show an alert to see if JavaScript is working at all
 try {
-  alert('Vysor UI is loading...');
+  // alert('Vysor UI is loading...');
+  // avoid blocking alert in webview; use console for diagnostics
+  console.info('Vysor UI is loading (non-blocking)');
 } catch (e) {
   console.log('Alert failed:', e);
 }
