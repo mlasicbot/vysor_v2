@@ -13,3 +13,4 @@ export * from './StatusBar';
 export * from './MentionsPopup';
 export * from './HistoryPanel';
 export * from './TraceView';
+export * from './PendingChangesCard';

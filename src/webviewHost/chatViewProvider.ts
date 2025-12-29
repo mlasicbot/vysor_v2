@@ -11,6 +11,7 @@ type Session = { id: string; title: string; turns: Turn[]; createdAt: number; st
 type WebviewMsg =
   | { type: 'UPLOAD/FILE'; name: string; mime: string; dataBase64: string; sessionId: string }
   | { type: 'CHAT/CLEAR_SESSION'; sessionId: string }
+  | { type: 'CHAT/SWITCH_SESSION'; sessionId: string }
   | { type: 'UI/READY' }
   | { type: 'CHAT/SEND_PROMPT'; prompt: string; contextBlobs: string[]; sessionId: string; titleHint: string }
   | { type: 'CHAT/STOP'; runId: string }
@@ -19,7 +20,14 @@ type WebviewMsg =
   | { type: 'HISTORY/DELETE_SESSION'; sessionId: string }
   | { type: 'MENTION/QUERY'; q: string }
   | { type: 'MENTION/LIST_DIR'; path: string }
-  | { type: 'MENTION/READ_FILE'; path: string };
+  | { type: 'MENTION/READ_FILE'; path: string }
+  // Shadow Workspace Messages
+  | { type: 'SHADOW/GET_PENDING' }
+  | { type: 'SHADOW/ACCEPT_EDIT'; editId: string }
+  | { type: 'SHADOW/ACCEPT_ALL' }
+  | { type: 'SHADOW/REJECT_EDIT'; editId: string }
+  | { type: 'SHADOW/REJECT_ALL' }
+  | { type: 'SHADOW/GET_DIFF'; path: string };
 
 export class ChatViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = 'vysor.chatView';
@@ -91,6 +99,28 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           }
           return this.postHistory();             // push back to UI
         };
+        
+        case 'CHAT/SWITCH_SESSION': {
+          // Set the current chat ID in the orchestrator for scoping pending changes
+          this.orchestrator.setCurrentChatId(msg.sessionId);
+          // Refresh pending changes to show only this chat's changes
+          this.handleGetPendingChanges();
+          return;
+        }
+
+        // Shadow Workspace handlers
+        case 'SHADOW/GET_PENDING':
+          return this.handleGetPendingChanges();
+        case 'SHADOW/ACCEPT_EDIT':
+          return this.handleAcceptEdit(msg.editId);
+        case 'SHADOW/ACCEPT_ALL':
+          return this.handleAcceptAll();
+        case 'SHADOW/REJECT_EDIT':
+          return this.handleRejectEdit(msg.editId);
+        case 'SHADOW/REJECT_ALL':
+          return this.handleRejectAll();
+        case 'SHADOW/GET_DIFF':
+          return this.handleGetDiff(msg.path);
       }
     } catch (e:any) {
       this.log?.error?.('onMessage error', e);
@@ -100,6 +130,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   
   // ---------- chat run ----------
   private async runChat(sessionId: string, prompt: string, blobs: string[], titleHint: string) {
+    // Set the current chat ID for associating file changes
+    this.orchestrator.setCurrentChatId(sessionId);
+    
     const runId = this.id();
     this.post({ type: 'CHAT/STREAM_START', runId, sessionId });
 
@@ -150,6 +183,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         await this.saveHistory(history);
         this.post({ type:'CHAT/STREAM_END', runId, ok:true });
         this.postHistory();
+        
+        // Push pending changes to UI after chat completes
+        if (this.orchestrator.hasPendingChanges()) {
+          this.handleGetPendingChanges();
+        }
       }
     }
   }
@@ -263,6 +301,103 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   </script>
 </body>
 </html>`;
+  }
+
+  // ---------- Shadow Workspace Handlers ----------
+  
+  /** 
+   * Public method to refresh pending changes in the webview.
+   * Called from editor commands to sync state.
+   */
+  public refreshPendingChanges() {
+    this.handleGetPendingChanges();
+  }
+
+  private handleGetPendingChanges() {
+    const pending = this.orchestrator.getPendingEdits();
+    const summary = this.orchestrator.getPendingChangesSummary();
+    this.post({
+      type: 'SHADOW/PENDING_CHANGES',
+      edits: pending.map(e => ({
+        id: e.id,
+        path: e.path,
+        operationType: e.operationType,
+        additions: e.diff?.additions ?? 0,
+        deletions: e.diff?.deletions ?? 0,
+        isNewFile: e.diff?.isNewFile ?? false,
+        isDeleted: e.diff?.isDeleted ?? false,
+        description: e.description,
+        status: e.status,
+      })),
+      summary: summary ? {
+        totalFiles: summary.totalFiles,
+        additions: summary.additions,
+        deletions: summary.deletions,
+        newFiles: summary.newFiles,
+        modifiedFiles: summary.modifiedFiles,
+        deletedFiles: summary.deletedFiles,
+      } : null,
+    });
+  }
+
+  private async handleAcceptEdit(editId: string) {
+    const result = await this.orchestrator.acceptEdit(editId);
+    this.post({
+      type: 'SHADOW/ACCEPT_RESULT',
+      editId,
+      success: result.success,
+      committedPaths: result.committedPaths,
+      failedPaths: result.failedPaths,
+      summary: result.summary,
+    });
+    // Refresh pending changes after accept
+    this.handleGetPendingChanges();
+  }
+
+  private async handleAcceptAll() {
+    const result = await this.orchestrator.acceptAllEdits();
+    this.post({
+      type: 'SHADOW/ACCEPT_ALL_RESULT',
+      success: result.success,
+      committedPaths: result.committedPaths,
+      failedPaths: result.failedPaths,
+      summary: result.summary,
+    });
+    // Refresh pending changes after accept
+    this.handleGetPendingChanges();
+  }
+
+  private async handleRejectEdit(editId: string) {
+    const success = await this.orchestrator.rejectEdit(editId);
+    this.post({
+      type: 'SHADOW/REJECT_RESULT',
+      editId,
+      success,
+    });
+    // Refresh pending changes after reject
+    this.handleGetPendingChanges();
+  }
+
+  private async handleRejectAll() {
+    await this.orchestrator.rejectAllEdits();
+    this.post({
+      type: 'SHADOW/REJECT_ALL_RESULT',
+      success: true,
+    });
+    // Refresh pending changes after reject
+    this.handleGetPendingChanges();
+  }
+
+  private handleGetDiff(path: string) {
+    const diff = this.orchestrator.getFormattedDiff(path);
+    const edit = this.orchestrator.getPendingEdits().find(e => e.path === path);
+    this.post({
+      type: 'SHADOW/DIFF',
+      path,
+      diff: diff ?? null,
+      editId: edit?.id ?? null,
+      operationType: edit?.operationType ?? null,
+    });
   }
 
   // ---------- utils ----------

@@ -2,7 +2,8 @@
 // Orchestrator — coordinates UI ↔ Planner ↔ File Tools workflow (strict per-hop trajectory)
 
 import { PlannerClient } from './planner/plannerClient';
-import { FileOperationTools } from './tools';
+import { ShadowFileTools } from './shadow';
+import type { PendingEdit, PendingChangesSummary, CommitResult } from './shadow';
 import * as util from 'util';
 
 export interface OrchestratorConfig {
@@ -12,6 +13,9 @@ export interface OrchestratorConfig {
   modelName?: string;
   networkRetries?: number;
   networkRetryBackoffMs?: number;
+  
+  /** Enable shadow workspace for preview-before-apply workflow */
+  shadowWorkspaceEnabled?: boolean;
 }
 
 export interface QueryRequest {
@@ -35,12 +39,12 @@ export class Orchestrator {
   private isGenerating = false;
   private abortController: AbortController | null = null;
   private planner: PlannerClient;
-  private fileTools: FileOperationTools;
+  private fileTools: ShadowFileTools;
 
   private maxIterations: number;
   private currentCfg: OrchestratorConfig;
 
-  constructor(config: OrchestratorConfig, deps?: { planner?: PlannerClient; fileTools?: FileOperationTools }) {
+  constructor(config: OrchestratorConfig, deps?: { planner?: PlannerClient; fileTools?: ShadowFileTools }) {
     this.currentCfg = { ...config };
     this.maxIterations = config.maxIterations ?? 50;
 
@@ -54,11 +58,102 @@ export class Orchestrator {
         modelName: config.modelName,
       });
 
-    this.fileTools = deps?.fileTools ?? new FileOperationTools();
+    this.fileTools = deps?.fileTools ?? new ShadowFileTools({
+      enabled: config.shadowWorkspaceEnabled ?? true,
+    });
   }
 
   isCurrentlyGenerating(): boolean { return this.isGenerating; }
   stopGeneration(): void { if (this.isGenerating && this.abortController) this.abortController.abort(); }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // SHADOW WORKSPACE CONTROL
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * Check if there are pending changes in the shadow workspace
+   */
+  hasPendingChanges(): boolean {
+    return this.fileTools.hasPendingChanges();
+  }
+
+  /**
+   * Get all pending edits
+   */
+  getPendingEdits(): PendingEdit[] {
+    return this.fileTools.getPendingEdits();
+  }
+
+  /**
+   * Get summary of pending changes
+   */
+  getPendingChangesSummary(): PendingChangesSummary | null {
+    return this.fileTools.getPendingChangesSummary();
+  }
+
+  /**
+   * Get formatted diff for a specific file
+   */
+  getFormattedDiff(relativePath: string): string | null {
+    return this.fileTools.getFormattedDiff(relativePath);
+  }
+
+  /**
+   * Accept a single pending edit by ID
+   */
+  async acceptEdit(editId: string): Promise<CommitResult> {
+    return this.fileTools.acceptEdit(editId);
+  }
+
+  /**
+   * Accept all pending edits
+   */
+  async acceptAllEdits(): Promise<CommitResult> {
+    return this.fileTools.acceptAll();
+  }
+
+  /**
+   * Reject/Undo a single pending edit by ID (restores original file state)
+   */
+  async rejectEdit(editId: string): Promise<boolean> {
+    return this.fileTools.rejectEdit(editId);
+  }
+
+  /**
+   * Reject/Undo all pending edits (restores all original file states)
+   */
+  async rejectAllEdits(): Promise<void> {
+    return this.fileTools.rejectAll();
+  }
+
+  /**
+   * Clear all pending edits
+   */
+  clearPendingEdits(): void {
+    return this.fileTools.clear();
+  }
+
+  /**
+   * Set the current chat ID for associating file changes
+   * Call this when switching chats or starting a new chat
+   */
+  setCurrentChatId(chatId: string | null): void {
+    this.fileTools.setCurrentChatId(chatId);
+  }
+
+  /**
+   * Get the current chat ID
+   */
+  getCurrentChatId(): string | null {
+    return this.fileTools.getCurrentChatId();
+  }
+
+  /**
+   * Subscribe to shadow workspace events
+   */
+  onShadowEvent(listener: (event: any) => void): () => void {
+    return this.fileTools.onShadowEvent(listener);
+  }
 
   async generateInlineCompletion(
     before: string,
@@ -326,7 +421,7 @@ export class Orchestrator {
   private async safeDirTree(): Promise<string> {
     try {
       const ws = this.fileTools.getWorkspacePath();
-      return (await this.fileTools.generateDirectoryStructure(ws)).trimEnd();
+      return (await this.fileTools.generateDirectoryStructure(ws, '.')).trimEnd();
     } catch (e) {
       return `<<error generating workspace tree: ${String(e)}>>`;
     }

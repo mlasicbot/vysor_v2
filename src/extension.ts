@@ -7,6 +7,9 @@ import { ConfigManager } from './utils/config';
 import { Orchestrator } from './core/orchestrator';
 import { ChatViewProvider } from './webviewHost/chatViewProvider';
 
+// Global reference for shadow workspace status bar
+let shadowStatusBarItem: vscode.StatusBarItem | undefined;
+
 export async function activate(context: vscode.ExtensionContext) {
   // 1) Logger (OutputChannel + file at context.logUri)
   // console.log(">>> Vysor activate() called");
@@ -62,6 +65,199 @@ export async function activate(context: vscode.ExtensionContext) {
     
     log.info('Webview view provider registered successfully');
     context.subscriptions.push(viewDisposable);
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // SHADOW WORKSPACE - Editor Controls
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    // Status Bar Item for pending changes
+    shadowStatusBarItem = vscode.window.createStatusBarItem(
+      vscode.StatusBarAlignment.Left,
+      100
+    );
+    shadowStatusBarItem.command = 'vysor.shadow.review';
+    context.subscriptions.push(shadowStatusBarItem);
+
+    // Update status bar and context keys
+    const updateShadowStatus = () => {
+      const hasPending = orchestrator.hasPendingChanges();
+      const pending = orchestrator.getPendingEdits();
+      const summary = orchestrator.getPendingChangesSummary();
+      
+      // Update context keys for menu visibility
+      vscode.commands.executeCommand('setContext', 'vysor.hasPendingChanges', hasPending);
+      
+      // Check if current file has pending changes
+      const activeEditor = vscode.window.activeTextEditor;
+      if (activeEditor) {
+        const ws = vscode.workspace.workspaceFolders?.[0];
+        if (ws) {
+          const relativePath = vscode.workspace.asRelativePath(activeEditor.document.uri, false);
+          const fileHasPending = pending.some(e => e.path === relativePath);
+          vscode.commands.executeCommand('setContext', 'vysor.fileHasPendingChanges', fileHasPending);
+        }
+      }
+      
+      // Update status bar
+      if (hasPending && summary) {
+        const adds = summary.additions > 0 ? `+${summary.additions}` : '';
+        const dels = summary.deletions > 0 ? `-${summary.deletions}` : '';
+        const stats = [adds, dels].filter(Boolean).join(' ');
+        shadowStatusBarItem!.text = `$(git-pull-request) ${summary.totalFiles} pending ${stats}`;
+        shadowStatusBarItem!.tooltip = `Vysor: ${summary.totalFiles} file(s) with pending changes\nClick to review`;
+        shadowStatusBarItem!.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
+        shadowStatusBarItem!.show();
+      } else {
+        shadowStatusBarItem!.hide();
+      }
+    };
+
+    // Listen for shadow workspace events
+    const unsubscribeShadow = orchestrator.onShadowEvent((event) => {
+      log.info('[Shadow] Event received', event);
+      updateShadowStatus();
+    });
+    context.subscriptions.push({ dispose: unsubscribeShadow });
+
+    // Update on editor change
+    context.subscriptions.push(
+      vscode.window.onDidChangeActiveTextEditor(() => updateShadowStatus())
+    );
+
+    // Register Shadow Workspace commands
+    context.subscriptions.push(
+      vscode.commands.registerCommand('vysor.shadow.acceptAll', async () => {
+        try {
+          const result = await orchestrator.acceptAllEdits();
+          if (result.success) {
+            vscode.window.showInformationMessage(
+              `✅ Applied ${result.committedPaths.length} file(s)`
+            );
+          } else {
+            vscode.window.showWarningMessage(
+              `⚠️ Some changes failed: ${result.failedPaths.map(f => f.path).join(', ')}`
+            );
+          }
+          updateShadowStatus();
+          // Sync with webview
+          provider.refreshPendingChanges();
+        } catch (e) {
+          vscode.window.showErrorMessage(`Failed to apply changes: ${e}`);
+        }
+      })
+    );
+
+    context.subscriptions.push(
+      vscode.commands.registerCommand('vysor.shadow.review', async () => {
+        const pending = orchestrator.getPendingEdits();
+        if (pending.length === 0) {
+          vscode.window.showInformationMessage('No pending changes to review');
+          return;
+        }
+
+        // Show quick pick with pending files
+        const items = pending.map(e => ({
+          label: `$(${getIconForOperation(e.operationType)}) ${e.path}`,
+          description: e.description || formatDiffStats(e),
+          detail: `${e.operationType} • ${e.diff?.additions ?? 0} additions, ${e.diff?.deletions ?? 0} deletions`,
+          edit: e,
+        }));
+
+        const selected = await vscode.window.showQuickPick(items, {
+          placeHolder: 'Select a file to view diff',
+          title: `Review Pending Changes (${pending.length} file${pending.length === 1 ? '' : 's'})`,
+        });
+
+        if (selected) {
+          // Show diff in a new editor
+          await showDiffForFile(selected.edit.path, orchestrator);
+        }
+      })
+    );
+
+    context.subscriptions.push(
+      vscode.commands.registerCommand('vysor.shadow.rejectAll', async () => {
+        const pending = orchestrator.getPendingEdits();
+        if (pending.length === 0) {
+          vscode.window.showInformationMessage('No pending changes to undo');
+          return;
+        }
+
+        const confirm = await vscode.window.showWarningMessage(
+          `Discard all ${pending.length} pending change(s)?`,
+          { modal: true },
+          'Discard All'
+        );
+
+        if (confirm === 'Discard All') {
+          await orchestrator.rejectAllEdits();
+          vscode.window.showInformationMessage('↩️ All changes undone');
+          updateShadowStatus();
+          // Sync with webview
+          provider.refreshPendingChanges();
+        }
+      })
+    );
+
+    context.subscriptions.push(
+      vscode.commands.registerCommand('vysor.shadow.acceptFile', async () => {
+        const activeEditor = vscode.window.activeTextEditor;
+        if (!activeEditor) return;
+
+        const relativePath = vscode.workspace.asRelativePath(activeEditor.document.uri, false);
+        const edit = orchestrator.getPendingEdits().find(e => e.path === relativePath);
+        
+        if (!edit) {
+          vscode.window.showInformationMessage('No pending changes for this file');
+          return;
+        }
+
+        const result = await orchestrator.acceptEdit(edit.id);
+        if (result.success) {
+          vscode.window.showInformationMessage(`✅ Applied changes to ${relativePath}`);
+        } else {
+          vscode.window.showErrorMessage(`Failed to apply: ${result.summary}`);
+        }
+        updateShadowStatus();
+        // Sync with webview
+        provider.refreshPendingChanges();
+      })
+    );
+
+    context.subscriptions.push(
+      vscode.commands.registerCommand('vysor.shadow.rejectFile', async () => {
+        const activeEditor = vscode.window.activeTextEditor;
+        if (!activeEditor) return;
+
+        const relativePath = vscode.workspace.asRelativePath(activeEditor.document.uri, false);
+        const edit = orchestrator.getPendingEdits().find(e => e.path === relativePath);
+        
+        if (!edit) {
+          vscode.window.showInformationMessage('No pending changes for this file');
+          return;
+        }
+
+        await orchestrator.rejectEdit(edit.id);
+        vscode.window.showInformationMessage(`↩️ Undone changes to ${relativePath}`);
+        updateShadowStatus();
+        // Sync with webview
+        provider.refreshPendingChanges();
+      })
+    );
+
+    context.subscriptions.push(
+      vscode.commands.registerCommand('vysor.shadow.showDiff', async () => {
+        const activeEditor = vscode.window.activeTextEditor;
+        if (!activeEditor) return;
+
+        const relativePath = vscode.workspace.asRelativePath(activeEditor.document.uri, false);
+        await showDiffForFile(relativePath, orchestrator);
+      })
+    );
+
+    // Initial status update
+    updateShadowStatus();
+    log.info('Shadow workspace editor controls registered');
 
     // --- DEBUG: Inline completion provider (temporary, verbose) ---
     try {
@@ -346,5 +542,102 @@ function looksLikeUrl(s?: string): boolean {
     return Boolean(u.protocol && u.host);
   } catch {
     return false;
+  }
+}
+
+// --- Shadow Workspace Helpers ---
+function getIconForOperation(op: string): string {
+  switch (op) {
+    case 'create': return 'new-file';
+    case 'modify': return 'edit';
+    case 'delete': return 'trash';
+    case 'rename':
+    case 'move': return 'file-symlink-file';
+    default: return 'file';
+  }
+}
+
+function formatDiffStats(edit: any): string {
+  const adds = edit.diff?.additions ?? 0;
+  const dels = edit.diff?.deletions ?? 0;
+  const parts: string[] = [];
+  if (adds > 0) parts.push(`+${adds}`);
+  if (dels > 0) parts.push(`-${dels}`);
+  return parts.join(' ') || 'no changes';
+}
+
+async function showDiffForFile(relativePath: string, orchestrator: Orchestrator): Promise<void> {
+  const pending = orchestrator.getPendingEdits().find(e => e.path === relativePath);
+  if (!pending) {
+    vscode.window.showInformationMessage(`No pending changes for ${relativePath}`);
+    return;
+  }
+
+  const ws = vscode.workspace.workspaceFolders?.[0];
+  if (!ws) return;
+
+  // Register content providers if not already registered
+  const originalScheme = 'vysor-original';
+  const proposedScheme = 'vysor-proposed';
+  
+  if (!diffContentProviderRegistered) {
+    const provider = new VysorDiffContentProvider();
+    vscode.workspace.registerTextDocumentContentProvider(proposedScheme, provider);
+    vscode.workspace.registerTextDocumentContentProvider(originalScheme, provider);
+    diffContentProviderRegistered = true;
+    diffContentProviderRef = provider;
+  }
+
+  const timestamp = Date.now();
+  
+  // For NEW files: use virtual empty document as original
+  // For EXISTING files: use virtual document with original content
+  const isNewFile = pending.operationType === 'create' || pending.originalContent === null;
+  
+  let originalUri: vscode.Uri;
+  if (isNewFile) {
+    // New file: create virtual empty document
+    originalUri = vscode.Uri.parse(`${originalScheme}:/${relativePath}?type=original&ts=${timestamp}`);
+    if (diffContentProviderRef) {
+      diffContentProviderRef.setContent(originalUri.toString(), ''); // Empty for new files
+    }
+  } else {
+    // Existing file: create virtual document with original content
+    originalUri = vscode.Uri.parse(`${originalScheme}:/${relativePath}?type=original&ts=${timestamp}`);
+    if (diffContentProviderRef) {
+      diffContentProviderRef.setContent(originalUri.toString(), pending.originalContent ?? '');
+    }
+  }
+  
+  // Create virtual document for proposed content
+  const proposedUri = vscode.Uri.parse(`${proposedScheme}:/${relativePath}?type=proposed&ts=${timestamp}`);
+  if (diffContentProviderRef && pending.newContent !== null) {
+    diffContentProviderRef.setContent(proposedUri.toString(), pending.newContent);
+  }
+
+  // Open diff editor
+  const opLabel = isNewFile ? 'New File' : 'Pending Changes';
+  const title = `${relativePath} (${opLabel})`;
+  await vscode.commands.executeCommand('vscode.diff', originalUri, proposedUri, title);
+}
+
+// Diff content provider for virtual documents
+let diffContentProviderRegistered = false;
+let diffContentProviderRef: VysorDiffContentProvider | undefined;
+
+class VysorDiffContentProvider implements vscode.TextDocumentContentProvider {
+  private contents = new Map<string, string>();
+  private _onDidChange = new vscode.EventEmitter<vscode.Uri>();
+  
+  get onDidChange(): vscode.Event<vscode.Uri> {
+    return this._onDidChange.event;
+  }
+
+  setContent(uri: string, content: string): void {
+    this.contents.set(uri, content);
+  }
+
+  provideTextDocumentContent(uri: vscode.Uri): string {
+    return this.contents.get(uri.toString()) ?? '';
   }
 }

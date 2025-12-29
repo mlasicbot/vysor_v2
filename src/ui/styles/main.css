@@ -116,3 +116,234 @@ html,body,#root{height:100%;margin:0;background:var(--bg);color:var(--fg);font:1
 .hop-content{padding:8px 10px;border-top:1px solid var(--border)}
 .hop-content h4{margin:8px 0 4px;color:var(--fg)}
 .hop-content pre{background:#0006;border:1px solid var(--border);border-radius:6px;padding:8px;overflow:auto}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   PENDING CHANGES CARD (Shadow Workspace)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.pending-changes-card {
+  border: 1px solid var(--accent);
+  background: linear-gradient(135deg, rgba(10, 132, 255, 0.08), rgba(10, 132, 255, 0.02));
+  border-radius: 10px;
+  margin: 8px 0;
+  overflow: hidden;
+  transition: all 0.2s ease;
+}
+
+.pending-changes-card.hidden {
+  display: none;
+}
+
+.pending-header {
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.pending-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pending-icon {
+  font-size: 16px;
+}
+
+.pending-title {
+  font-weight: 600;
+  flex: 1;
+}
+
+.pending-stats {
+  display: flex;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.stat-add {
+  color: #4ec9b0;
+}
+
+.stat-remove {
+  color: #f14c4c;
+}
+
+.pending-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.pending-actions .btn {
+  font-size: 12px;
+  padding: 6px 12px;
+}
+
+.pending-actions .btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+}
+
+.pending-actions .btn.primary:hover {
+  background: color-mix(in srgb, var(--accent) 85%, white);
+}
+
+.pending-actions .btn.secondary {
+  background: transparent;
+  border-color: var(--border);
+}
+
+.pending-actions .btn.danger {
+  background: transparent;
+  border-color: #f14c4c;
+  color: #f14c4c;
+}
+
+.pending-actions .btn.danger:hover {
+  background: rgba(241, 76, 76, 0.1);
+}
+
+/* File list (expanded view) */
+.pending-file-list {
+  border-top: 1px solid var(--border);
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.pending-file-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  transition: background 0.15s ease;
+}
+
+.pending-file-item:last-child {
+  border-bottom: none;
+}
+
+.pending-file-item:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.pending-file-item .file-icon {
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.pending-file-item .file-path {
+  flex: 1;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--fg);
+}
+
+.pending-file-item .file-changes {
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.pending-file-item .file-item-actions {
+  display: flex;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.pending-file-item:hover .file-item-actions {
+  opacity: 1;
+}
+
+.file-item-actions .btn.icon-btn {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  border-radius: 4px;
+  background: transparent;
+  border: 1px solid transparent;
+}
+
+.file-item-actions .btn.icon-btn:hover {
+  border-color: var(--border);
+  background: var(--panel);
+}
+
+.file-item-actions .btn.icon-btn.accept:hover {
+  border-color: #4ec9b0;
+  color: #4ec9b0;
+}
+
+.file-item-actions .btn.icon-btn.reject:hover {
+  border-color: #f14c4c;
+  color: #f14c4c;
+}
+
+/* Operation type indicators */
+.pending-file-item.create .file-path {
+  color: #4ec9b0;
+}
+
+.pending-file-item.delete .file-path {
+  color: #f14c4c;
+  text-decoration: line-through;
+}
+
+.pending-file-item.rename .file-path,
+.pending-file-item.move .file-path {
+  color: #ddb100;
+}
+
+/* Diff viewer modal (placeholder - can be extended) */
+.diff-viewer {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.diff-content {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  width: 90%;
+  max-width: 800px;
+  max-height: 80vh;
+  overflow: auto;
+  padding: 16px;
+}
+
+.diff-content pre {
+  margin: 0;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.diff-line-add {
+  background: rgba(78, 201, 176, 0.15);
+  color: #4ec9b0;
+}
+
+.diff-line-remove {
+  background: rgba(241, 76, 76, 0.15);
+  color: #f14c4c;
+}
+
+.diff-line-header {
+  color: var(--accent);
+  font-weight: 600;
+}

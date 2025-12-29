@@ -1,7 +1,7 @@
 import { send, onMessage } from './bus';
 import { state, current, stringify } from './state';
 import type { ExtensionInbound } from './types';
-import { Toolbar, MessageList, Composer, HistoryPanel } from './components/index';
+import { Toolbar, MessageList, Composer, HistoryPanel, PendingChangesCard } from './components/index';
 import type { MessageBubbleProps } from './components/MessageBubble';
 
 console.log('=== VYSOR UI LOADING ==='); // Basic debug
@@ -20,7 +20,7 @@ const root = document.getElementById('root')!;
 console.log('Root element found:', root); // Basic debug
 console.log('Document ready state:', document.readyState); // Basic debug
 
-let toolbar: Toolbar, composer: Composer, historyPanel: HistoryPanel, messageList: MessageList;
+let toolbar: Toolbar, composer: Composer, historyPanel: HistoryPanel, messageList: MessageList, pendingChangesCard: PendingChangesCard;
 
 function render() {
   console.log('=== RENDER FUNCTION CALLED ==='); // Basic debug
@@ -53,6 +53,17 @@ function render() {
     });
   }
   messageList = new MessageList().mount(root, { items, generating: state.generating });
+
+  // Pending Changes Card (Shadow Workspace)
+  pendingChangesCard = new PendingChangesCard().mount(root, {
+    edits: state.pendingEdits,
+    summary: state.pendingChangesSummary,
+    onAcceptAll: () => send({ type: 'SHADOW/ACCEPT_ALL' }),
+    onRejectAll: () => send({ type: 'SHADOW/REJECT_ALL' }),
+    onAcceptEdit: (editId) => send({ type: 'SHADOW/ACCEPT_EDIT', editId }),
+    onRejectEdit: (editId) => send({ type: 'SHADOW/REJECT_EDIT', editId }),
+    onViewDiff: (path) => send({ type: 'SHADOW/GET_DIFF', path }),
+  });
 
   // Composer
   composer = new Composer().mount(root, {
@@ -93,7 +104,13 @@ function render() {
   historyPanel = new HistoryPanel().mount(toolbar.historyHost, {
     open: state.historyOpen,
     items: state.sessions,
-    onPick: (id) => { state.currentId = id; state.historyOpen = false; render(); },
+    onPick: (id) => { 
+      state.currentId = id; 
+      state.historyOpen = false; 
+      // Notify extension about chat switch for pending changes scoping
+      send({ type: 'CHAT/SWITCH_SESSION', sessionId: id });
+      render(); 
+    },
   });
 }
 
@@ -173,7 +190,14 @@ onMessage((msg: ExtensionInbound) => {
 
     case 'HISTORY/LOAD_OK':
       state.sessions = msg.history || [];
-      state.currentId = msg.focus || state.sessions[0]?.id || state.currentId;
+      const newCurrentId = msg.focus || state.sessions[0]?.id || state.currentId;
+      if (newCurrentId !== state.currentId) {
+        state.currentId = newCurrentId;
+        // Notify extension about chat switch for pending changes scoping
+        send({ type: 'CHAT/SWITCH_SESSION', sessionId: newCurrentId });
+      } else {
+        state.currentId = newCurrentId;
+      }
       state.draft = '';
       render();
       break;
@@ -257,10 +281,6 @@ onMessage((msg: ExtensionInbound) => {
     state.contextBlobs.push(
       `<<<DOC name="${name.replace(/"/g,'\\"')}" mime="${mime}">>>\n${content}\n<<<END DOC>>>`
     );
-    // const name = path.replace(/^ATTACH:/, '');
-    // state.contextBlobs.push(
-    //   `<<<DOC name="${name.replace(/"/g,'\\"')}" mime="text/markdown">>\n${content}\n<<<END DOC>>>`
-    // );
   } else {
     const lang = guessLang(path);
     state.contextBlobs.push(
@@ -270,6 +290,57 @@ onMessage((msg: ExtensionInbound) => {
   closeMentions();
   break;
 }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // SHADOW WORKSPACE MESSAGES
+    // ═══════════════════════════════════════════════════════════════════════════
+    
+    case 'SHADOW/PENDING_CHANGES':
+      state.pendingEdits = msg.edits || [];
+      state.pendingChangesSummary = msg.summary || null;
+      updatePendingChangesCard();
+      break;
+
+    case 'SHADOW/ACCEPT_RESULT':
+      console.log('[UI] Shadow accept result:', msg);
+      if (msg.success) {
+        // Show success feedback
+        showToast(`✅ ${msg.summary || 'Changes applied'}`);
+      } else {
+        showToast(`❌ Failed to apply changes`);
+      }
+      break;
+
+    case 'SHADOW/ACCEPT_ALL_RESULT':
+      console.log('[UI] Shadow accept all result:', msg);
+      if (msg.success) {
+        showToast(`✅ All changes applied (${msg.committedPaths?.length || 0} files)`);
+      } else {
+        showToast(`❌ Some changes failed to apply`);
+      }
+      break;
+
+    case 'SHADOW/REJECT_RESULT':
+      console.log('[UI] Shadow reject result:', msg);
+      if (msg.success) {
+        showToast(`↩️ Change reverted`);
+      }
+      break;
+
+    case 'SHADOW/REJECT_ALL_RESULT':
+      console.log('[UI] Shadow reject all result:', msg);
+      showToast(`↩️ All changes reverted`);
+      break;
+
+    case 'SHADOW/DIFF':
+      console.log('[UI] Shadow diff:', msg);
+      if (msg.diff) {
+        state.diffViewerOpen = true;
+        state.diffViewerPath = msg.path;
+        state.diffViewerContent = msg.diff;
+        showDiffViewer();
+      }
+      break;
 
   }
 });
@@ -381,10 +452,146 @@ function guessLang(p: string): string {
 }
 
 
+// ═══════════════════════════════════════════════════════════════════════════
+// SHADOW WORKSPACE HELPERS
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** Update only the pending changes card without full re-render */
+function updatePendingChangesCard() {
+  if (pendingChangesCard) {
+    pendingChangesCard.update({
+      edits: state.pendingEdits,
+      summary: state.pendingChangesSummary,
+      onAcceptAll: () => send({ type: 'SHADOW/ACCEPT_ALL' }),
+      onRejectAll: () => send({ type: 'SHADOW/REJECT_ALL' }),
+      onAcceptEdit: (editId) => send({ type: 'SHADOW/ACCEPT_EDIT', editId }),
+      onRejectEdit: (editId) => send({ type: 'SHADOW/REJECT_EDIT', editId }),
+      onViewDiff: (path) => send({ type: 'SHADOW/GET_DIFF', path }),
+    });
+  }
+}
+
+/** Show a simple toast notification */
+function showToast(message: string, duration = 3000) {
+  // Remove existing toast if any
+  const existing = document.querySelector('.vysor-toast');
+  if (existing) existing.remove();
+
+  const toast = document.createElement('div');
+  toast.className = 'vysor-toast';
+  toast.textContent = message;
+  toast.style.cssText = `
+    position: fixed;
+    bottom: 80px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--panel, #252526);
+    color: var(--fg, #ddd);
+    padding: 10px 20px;
+    border-radius: 8px;
+    border: 1px solid var(--border, #3b3b3b);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+    z-index: 1000;
+    animation: fadeInUp 0.2s ease;
+  `;
+  document.body.appendChild(toast);
+
+  setTimeout(() => {
+    toast.style.animation = 'fadeOut 0.2s ease forwards';
+    setTimeout(() => toast.remove(), 200);
+  }, duration);
+}
+
+/** Show the diff viewer modal */
+function showDiffViewer() {
+  // Remove existing viewer if any
+  const existing = document.querySelector('.diff-viewer');
+  if (existing) existing.remove();
+
+  if (!state.diffViewerContent) return;
+
+  const overlay = document.createElement('div');
+  overlay.className = 'diff-viewer';
+  overlay.onclick = (e) => {
+    if (e.target === overlay) closeDiffViewer();
+  };
+
+  const content = document.createElement('div');
+  content.className = 'diff-content';
+
+  // Header
+  const header = document.createElement('div');
+  header.style.cssText = 'display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--border);';
+  
+  const title = document.createElement('span');
+  title.style.cssText = 'font-weight: 600;';
+  title.textContent = state.diffViewerPath || 'Diff View';
+  header.appendChild(title);
+
+  const closeBtn = document.createElement('button');
+  closeBtn.className = 'btn secondary';
+  closeBtn.textContent = '×';
+  closeBtn.style.cssText = 'padding: 4px 8px; font-size: 16px;';
+  closeBtn.onclick = closeDiffViewer;
+  header.appendChild(closeBtn);
+
+  content.appendChild(header);
+
+  // Diff content with syntax highlighting
+  const pre = document.createElement('pre');
+  const lines = state.diffViewerContent.split('\n');
+  
+  for (const line of lines) {
+    const lineEl = document.createElement('div');
+    if (line.startsWith('+') && !line.startsWith('+++')) {
+      lineEl.className = 'diff-line-add';
+    } else if (line.startsWith('-') && !line.startsWith('---')) {
+      lineEl.className = 'diff-line-remove';
+    } else if (line.startsWith('@@')) {
+      lineEl.className = 'diff-line-header';
+    }
+    lineEl.textContent = line;
+    pre.appendChild(lineEl);
+  }
+  
+  content.appendChild(pre);
+  overlay.appendChild(content);
+  document.body.appendChild(overlay);
+
+  // Close on Escape
+  const handleEscape = (e: KeyboardEvent) => {
+    if (e.key === 'Escape') {
+      closeDiffViewer();
+      document.removeEventListener('keydown', handleEscape);
+    }
+  };
+  document.addEventListener('keydown', handleEscape);
+}
+
+function closeDiffViewer() {
+  state.diffViewerOpen = false;
+  state.diffViewerPath = null;
+  state.diffViewerContent = null;
+  const viewer = document.querySelector('.diff-viewer');
+  if (viewer) viewer.remove();
+}
+
+/** Request pending changes from extension on boot */
+function requestPendingChanges() {
+  send({ type: 'SHADOW/GET_PENDING' });
+}
+
 // boot
 send({ type:'UI/READY' });
 if (!state.sessions.length) {
   state.sessions = [{ id:'local', title:'New chat', turns:[], createdAt: Date.now() }];
   state.currentId = 'local';
 }
+// Notify extension about initial chat for pending changes scoping
+if (state.currentId) {
+  send({ type: 'CHAT/SWITCH_SESSION', sessionId: state.currentId });
+}
 render();
+
+// Request pending changes after initial render
+setTimeout(requestPendingChanges, 100);
