@@ -176,3 +176,143 @@ html, body, #root {
   --phase-bg: rgba(63, 185, 80, 0.1);
 }
 
+/* ─── Mini HUD Enhancements ─── */
+.mini-hud {
+  display: flex;
+  flex-direction: column;
+  gap: var(--vysor-space-2);
+  padding: var(--vysor-space-3);
+  background: var(--vysor-bg-raised);
+  border-radius: var(--vysor-radius-md);
+  border: 1px solid var(--vysor-border-muted);
+  margin-bottom: var(--vysor-space-3);
+  animation: vysor-fade-in 0.2s ease;
+}
+
+.mini-hud-line {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--vysor-space-2);
+  font-size: var(--vysor-font-size-sm);
+  line-height: 1.4;
+}
+
+.mini-hud-icon {
+  flex-shrink: 0;
+  font-size: var(--vysor-font-size-base);
+  opacity: 0.9;
+}
+
+.mini-hud-label {
+  flex-shrink: 0;
+  color: var(--vysor-fg-muted);
+  font-weight: 500;
+  min-width: 55px;
+}
+
+.mini-hud-text {
+  color: var(--vysor-fg);
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
+/* ─── Tool-specific styling ─── */
+.mini-hud-line[data-tool="search_replace"] .mini-hud-text,
+.mini-hud-line[data-tool="grep_search"] .mini-hud-text,
+.mini-hud-line[data-tool="semantic_search"] .mini-hud-text {
+  font-family: var(--vysor-font-sans);
+  background: var(--vysor-bg-elevated);
+  padding: 2px 6px;
+  border-radius: var(--vysor-radius-sm);
+}
+
+/* ─── Phase Badge ─── */
+.phase-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--vysor-space-1);
+  padding: 2px 8px;
+  font-size: var(--vysor-font-size-xs);
+  font-weight: 500;
+  border-radius: var(--vysor-radius-sm);
+  background: var(--phase-bg);
+  color: var(--phase-color);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.phase-badge.thinking {
+  --phase-color: var(--vysor-phase-thinking);
+  --phase-bg: rgba(163, 113, 247, 0.15);
+}
+
+.phase-badge.executing {
+  --phase-color: var(--vysor-phase-executing);
+  --phase-bg: rgba(0, 212, 255, 0.15);
+}
+
+.phase-badge.final {
+  --phase-color: var(--vysor-phase-final);
+  --phase-bg: rgba(63, 185, 80, 0.15);
+}
+
+.phase-badge.error {
+  --phase-color: var(--vysor-error);
+  --phase-bg: rgba(248, 81, 73, 0.15);
+}
+
+/* ─── Generating Indicator Enhancement ─── */
+.generating-indicator {
+  display: flex;
+  align-items: center;
+  gap: var(--vysor-space-2);
+  padding: var(--vysor-space-2) 0;
+}
+
+.generating-indicator .spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--vysor-border);
+  border-top-color: var(--vysor-accent);
+  border-radius: 50%;
+  animation: vysor-spin 0.8s linear infinite;
+}
+
+.generating-indicator .step-text {
+  color: var(--vysor-fg-muted);
+  font-size: var(--vysor-font-size-sm);
+}
+
+/* ─── Tool Result Cards ─── */
+.tool-result {
+  padding: var(--vysor-space-3);
+  background: var(--vysor-bg-elevated);
+  border-radius: var(--vysor-radius-md);
+  border-left: 3px solid var(--vysor-accent);
+  margin: var(--vysor-space-2) 0;
+  font-size: var(--vysor-font-size-sm);
+}
+
+.tool-result.success {
+  border-left-color: var(--vysor-success);
+}
+
+.tool-result.error {
+  border-left-color: var(--vysor-error);
+  background: var(--vysor-error-bg);
+}
+
+.tool-result-header {
+  display: flex;
+  align-items: center;
+  gap: var(--vysor-space-2);
+  margin-bottom: var(--vysor-space-2);
+  font-weight: 500;
+}
+
+.tool-result-content {
+  color: var(--vysor-fg-muted);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+

@@ -23,9 +23,34 @@ export interface QueryRequest {
   context?: string;
   maxIterations?: number;
   hopIndex?: number; // (unused in this version; hop numbers are internal)
+  mode?: 'agent' | 'ask' | 'plan' | 'debug'; // Cursor-style modes
 }
 
-export type ProgressCallback = (text: string, done?: boolean) => void;
+export type ProgressCallback = (text: string, done?: boolean, phase?: ResponsePhase) => void;
+
+/**
+ * Response phases for structured streaming (Cursor-style)
+ * Allows UI to render different sections appropriately
+ */
+export type ResponsePhase = 
+  | 'thinking'       // Internal reasoning
+  | 'tool_selection' // Choosing which tool to use
+  | 'tool_execution' // Running the tool
+  | 'tool_result'    // Result from tool execution
+  | 'final'          // Final response to user
+  | 'error';         // Error occurred
+
+/**
+ * Structured progress event for rich UI rendering
+ */
+export interface ProgressEvent {
+  phase: ResponsePhase;
+  content: string;
+  toolName?: string;
+  toolArgs?: Record<string, unknown>;
+  stepNumber?: number;
+  isComplete?: boolean;
+}
 
 export class Orchestrator {
   private raw(x: unknown): string {
@@ -43,6 +68,31 @@ export class Orchestrator {
 
   private maxIterations: number;
   private currentCfg: OrchestratorConfig;
+  
+  // Event listeners for structured progress
+  private progressListeners: ((event: ProgressEvent) => void)[] = [];
+
+  /**
+   * Subscribe to structured progress events
+   */
+  onProgress(listener: (event: ProgressEvent) => void): () => void {
+    this.progressListeners.push(listener);
+    return () => {
+      const idx = this.progressListeners.indexOf(listener);
+      if (idx >= 0) this.progressListeners.splice(idx, 1);
+    };
+  }
+
+  /**
+   * Emit a structured progress event
+   */
+  private emitProgress(event: ProgressEvent): void {
+    for (const listener of this.progressListeners) {
+      try {
+        listener(event);
+      } catch { /* ignore listener errors */ }
+    }
+  }
 
   constructor(config: OrchestratorConfig, deps?: { planner?: PlannerClient; fileTools?: ShadowFileTools }) {
     this.currentCfg = { ...config };
@@ -210,6 +260,25 @@ ${relevantLints}
     }
   }
 
+  /**
+   * Check if a tool is allowed in the current mode
+   * Ask mode: only read-only tools allowed
+   */
+  private isToolAllowedInMode(tool: string, mode?: string): boolean {
+    if (mode !== 'ask') return true;
+    
+    // Read-only tools allowed in Ask mode
+    const readOnlyTools = new Set([
+      'simple_query', 'final_answer',
+      'read_file', 'open_file', 'list_files', 'list_directories',
+      'directory_structure', 'check_file_exists', 'check_directory_exists',
+      'grep_search', 'semantic_search', 'glob_file_search',
+      'read_lints',
+    ]);
+    
+    return readOnlyTools.has(tool.toLowerCase());
+  }
+
   async processQuery(req: QueryRequest, onProgress?: ProgressCallback): Promise<string> {
     if (this.isGenerating) {
       onProgress?.('Another request is already running. Stop it or wait.', true);
@@ -220,6 +289,7 @@ ${relevantLints}
     this.abortController = new AbortController();
 
     const iterations = req.maxIterations ?? this.maxIterations;
+    const mode = req.mode || 'agent';
 
     // Trajectory we send to the planner (composed of completed/ongoing HOP blocks)
     let trajectory = '';
@@ -250,7 +320,13 @@ ${relevantLints}
           // Append to trajectory (typed block)
           trajectory += this.block('THOUGHTS', thought);
           // Stream minimal line for compressed view
-          onProgress?.(this.pretty(`Thought #${i + 1}`, thought), false);
+          onProgress?.(this.pretty(`Thought #${i + 1}`, thought), false, 'thinking');
+          // Emit structured event
+          this.emitProgress({
+            phase: 'thinking',
+            content: thought,
+            stepNumber: i + 1,
+          });
         } catch (e) {
           if (/(timed out)/i.test(String(e))) consecutiveTimeouts++;
           const errText = this.stepError('Think', e);
@@ -283,7 +359,14 @@ ${relevantLints}
           const selResp = await this.planner.selectTool({ trajectory }, this.abortController.signal);
           selectedTool = String(this.out<string>(selResp) ?? '').trim();
           trajectory += this.block('TOOL SELECTION', selectedTool || '(none)');
-          onProgress?.(this.pretty('Selected Tool', selectedTool || '(none)'), false);
+          onProgress?.(this.pretty('Selected Tool', selectedTool || '(none)'), false, 'tool_selection');
+          // Emit structured event
+          this.emitProgress({
+            phase: 'tool_selection',
+            content: selectedTool || '(none)',
+            toolName: selectedTool,
+            stepNumber: i + 1,
+          });
         } catch (e) {
           const errText = this.stepError('Tool Selection', e);
           onProgress?.(errText, false);
@@ -297,6 +380,19 @@ ${relevantLints}
         }
 
         this.ensureNotCancelled();
+
+        // ---------- Mode check: Ask mode restricts to read-only tools ----------
+        if (!this.isToolAllowedInMode(selectedTool, mode)) {
+          const errMsg = `Tool "${selectedTool}" is not allowed in Ask mode. Ask mode only supports read-only operations.`;
+          onProgress?.(this.pretty('Mode Restriction', errMsg), false, 'error');
+          trajectory += this.block('TOOL ARGUMENTS', { error: 'mode_restriction' });
+          trajectory += this.block('TOOL EXECUTION RESULT', errMsg);
+          trajectory += '<<<END HOP>>>\n';
+          
+          // Redirect to simple_query for answer
+          selectedTool = 'simple_query';
+          trajectory += this.block('TOOL SELECTION', 'simple_query (mode fallback)');
+        }
 
         // ---------- 3) TOOL FORMATTER ----------
         let formatterOut: any = {};
@@ -336,11 +432,34 @@ ${relevantLints}
         // ---------- 4) EXECUTE TOOL (VS Code / FS side) ----------
         let execResult = '';
         try {
+          // Emit tool execution start
+          this.emitProgress({
+            phase: 'tool_execution',
+            content: `Executing ${selectedTool}...`,
+            toolName: selectedTool,
+            toolArgs: typeof formatterOut === 'object' ? formatterOut : {},
+            stepNumber: i + 1,
+          });
+          
           execResult = await this.fileTools.executeFileOperation(selectedTool, formatterOut);
-          onProgress?.(this.pretty('Execution Result', execResult), false);
+          onProgress?.(this.pretty('Execution Result', execResult), false, 'tool_result');
+          
+          // Emit tool result
+          this.emitProgress({
+            phase: 'tool_result',
+            content: execResult,
+            toolName: selectedTool,
+            stepNumber: i + 1,
+          });
         } catch (e) {
           execResult = this.stepError('Tool Execution', e);
-          onProgress?.(execResult, false);
+          onProgress?.(execResult, false, 'error');
+          this.emitProgress({
+            phase: 'error',
+            content: execResult,
+            toolName: selectedTool,
+            stepNumber: i + 1,
+          });
         }
 
         // Append EXECUTION RESULT then close hop
@@ -350,7 +469,12 @@ ${relevantLints}
         // If this non-reasoning tool still yielded a final user-facing response, finalize.
         if (this.fileTools.isFinalResponse(selectedTool, formatterOut)) {
           finalResponse = execResult || 'OK';
-          onProgress?.(this.pretty('Final', finalResponse), true);
+          onProgress?.(this.pretty('Final', finalResponse), true, 'final');
+          this.emitProgress({
+            phase: 'final',
+            content: finalResponse,
+            isComplete: true,
+          });
           return finalResponse;
         }
 
@@ -358,7 +482,12 @@ ${relevantLints}
       }
 
       finalResponse = finalResponse || 'Maximum iterations reached without final response.';
-      onProgress?.(this.pretty('Done', finalResponse), true);
+      onProgress?.(this.pretty('Done', finalResponse), true, 'final');
+      this.emitProgress({
+        phase: 'final',
+        content: finalResponse,
+        isComplete: true,
+      });
       return finalResponse;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);

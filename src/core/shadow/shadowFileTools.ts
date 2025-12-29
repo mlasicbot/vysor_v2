@@ -151,6 +151,16 @@ export class ShadowFileTools {
         case 'terminal_execute':
           return this.terminalExecute(workspacePath, toolOutput);
 
+        // New Cursor-inspired tools
+        case 'search_replace':
+          return this.searchReplace(workspacePath, toolOutput);
+        case 'glob_file_search':
+          return this.globFileSearch(workspacePath, toolOutput);
+        case 'read_lints':
+          return this.readLints(workspacePath, toolOutput);
+        case 'todo_write':
+          return this.todoWrite(workspacePath, toolOutput);
+
         default:
           if (typeof toolOutput === 'object' && toolOutput && 'answer' in toolOutput) {
             return String(toolOutput.answer);
@@ -911,6 +921,296 @@ export class ShadowFileTools {
     }
   }
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // NEW CURSOR-INSPIRED TOOLS
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * Search and replace - surgical text replacement (preferred over write_file)
+   */
+  private async searchReplace(workspacePath: string, args: any): Promise<string> {
+    this.requireWrites();
+    const rel = this.requireStringArg(args?.file_path, 'file_path');
+    const oldString = typeof args?.old_string === 'string' ? args.old_string : '';
+    const newString = typeof args?.new_string === 'string' ? args.new_string : '';
+    const replaceAll = args?.replace_all === 'true' || args?.replace_all === true;
+
+    if (!oldString) {
+      return '❌ Error: old_string is required and must not be empty';
+    }
+    if (oldString === newString) {
+      return '❌ Error: new_string must be different from old_string';
+    }
+
+    const filePath = this.resolveSafe(workspacePath, rel);
+
+    try {
+      // Read current content
+      const originalContent = await fs.readFile(filePath, 'utf8');
+
+      // Check if old_string exists in the file
+      if (!originalContent.includes(oldString)) {
+        // Provide helpful error message
+        const preview = oldString.substring(0, 100);
+        return `❌ Error: Could not find the specified text in ${rel}\n\nLooking for:\n\`\`\`\n${preview}${oldString.length > 100 ? '...' : ''}\n\`\`\`\n\n💡 Tips:\n- Ensure old_string matches exactly (including whitespace/indentation)\n- Include 3-5 lines of context to ensure uniqueness\n- Use read_file first to see current content`;
+      }
+
+      // Check uniqueness (only if not replaceAll)
+      if (!replaceAll) {
+        const occurrences = originalContent.split(oldString).length - 1;
+        if (occurrences > 1) {
+          return `❌ Error: old_string appears ${occurrences} times in ${rel}. Either:\n- Include more context to make it unique\n- Use replace_all='true' to replace all occurrences`;
+        }
+      }
+
+      // Perform replacement
+      let newContent: string;
+      if (replaceAll) {
+        newContent = originalContent.split(oldString).join(newString);
+      } else {
+        newContent = originalContent.replace(oldString, newString);
+      }
+
+      // Track for undo if shadow enabled
+      if (this.shadow && this.config.enabled) {
+        if (this.config.autoApply) {
+          await this.shadow.trackModify(rel, originalContent, newContent, `search_replace in ${rel}`);
+          await fs.writeFile(filePath, newContent, 'utf8');
+          await this.tryReveal(filePath);
+          
+          const occurrences = replaceAll ? originalContent.split(oldString).length - 1 : 1;
+          return `✅ Replaced ${occurrences} occurrence${occurrences > 1 ? 's' : ''} in ${rel}\n\n💡 Use "Undo" to revert.`;
+        } else {
+          await this.shadow.proposeModify(rel, newContent, `search_replace in ${rel}`);
+          return `📝 Proposed: Replace text in ${rel}\n\n⚠️ Changes are pending.`;
+        }
+      }
+
+      // Direct write
+      await fs.writeFile(filePath, newContent, 'utf8');
+      if (this.config.revealEditedFiles) await this.tryReveal(filePath);
+      return `✅ Replaced text in ${rel}`;
+    } catch (e: any) {
+      if (e.code === 'ENOENT') {
+        return `❌ File not found: ${rel}\n\n💡 Use read_file or check_file_exists first.`;
+      }
+      return `❌ Error: ${this.prettyError(e)}`;
+    }
+  }
+
+  /**
+   * Glob file search - find files by name pattern
+   */
+  private async globFileSearch(workspacePath: string, args: any): Promise<string> {
+    const pattern = typeof args?.glob_pattern === 'string' ? args.glob_pattern.trim() : '';
+    const targetDir = typeof args?.target_directory === 'string' ? args.target_directory.trim() : '.';
+
+    if (!pattern) {
+      return '❌ Error: glob_pattern is required. Examples: "*.sv", "test_*.py", "axi_*"';
+    }
+
+    const searchPath = this.resolveSafe(workspacePath, targetDir || '.');
+    const results: string[] = [];
+    const maxResults = 100;
+
+    try {
+      await this.findFilesGlob(searchPath, workspacePath, pattern, results, maxResults);
+
+      if (results.length === 0) {
+        return `🔍 No files found matching pattern: \`${pattern}\` in ${targetDir || '.'}`;
+      }
+
+      // Sort by modification time (most recent first) would require stat calls
+      results.sort();
+
+      const header = `🔍 **Found ${results.length}${results.length >= maxResults ? '+' : ''} files** matching \`${pattern}\`\n\n`;
+      return header + results.map(f => `📄 ${f}`).join('\n');
+    } catch (e) {
+      return `❌ Search error: ${this.prettyError(e)}`;
+    }
+  }
+
+  private async findFilesGlob(
+    dirPath: string,
+    workspacePath: string,
+    pattern: string,
+    results: string[],
+    maxResults: number
+  ): Promise<void> {
+    if (results.length >= maxResults) return;
+
+    try {
+      const entries = await fs.readdir(dirPath, { withFileTypes: true });
+      
+      for (const entry of entries) {
+        if (results.length >= maxResults) break;
+
+        const fullPath = path.join(dirPath, entry.name);
+        const relPath = path.relative(workspacePath, fullPath).replace(/\\/g, '/');
+
+        if (entry.isDirectory()) {
+          // Skip common non-searchable directories
+          const skipDirs = ['node_modules', '.git', '.venv', '__pycache__', 'dist', 'out', 'build', '.cache'];
+          if (skipDirs.includes(entry.name)) continue;
+          
+          await this.findFilesGlob(fullPath, workspacePath, pattern, results, maxResults);
+        } else {
+          // Match against pattern
+          if (this.matchGlobPattern(entry.name, pattern)) {
+            results.push(relPath);
+          }
+        }
+      }
+    } catch {
+      // Skip directories that can't be read
+    }
+  }
+
+  private matchGlobPattern(filename: string, pattern: string): boolean {
+    // Convert glob pattern to regex
+    // *.sv → .*\.sv$
+    // test_*.py → test_.*\.py$
+    // *agent* → .*agent.*
+    const regexPattern = pattern
+      .replace(/[.+^${}()|[\]\\]/g, '\\$&')  // Escape regex chars except * and ?
+      .replace(/\*/g, '.*')                   // * → .*
+      .replace(/\?/g, '.');                   // ? → .
+    
+    const regex = new RegExp(`^${regexPattern}$`, 'i');
+    return regex.test(filename);
+  }
+
+  /**
+   * Read lints - get linter diagnostics for files
+   */
+  private async readLints(_workspacePath: string, args: any): Promise<string> {
+    const pathsArg = typeof args?.paths === 'string' ? args.paths.trim() : '';
+    
+    if (!pathsArg) {
+      return '❌ Error: paths is required. Provide comma-separated file paths.';
+    }
+
+    const paths = pathsArg.split(',').map((p: string) => p.trim()).filter(Boolean);
+
+    if (paths.length === 0) {
+      return '❌ Error: No valid file paths provided.';
+    }
+
+    try {
+      const diagnostics: string[] = [];
+      
+      for (const relPath of paths) {
+        const uri = vscode.Uri.file(path.join(_workspacePath, relPath));
+        const fileDiagnostics = vscode.languages.getDiagnostics(uri);
+        
+        if (fileDiagnostics.length === 0) {
+          diagnostics.push(`✅ **${relPath}**: No issues`);
+        } else {
+          diagnostics.push(`\n📋 **${relPath}** (${fileDiagnostics.length} issues):\n`);
+          
+          for (const d of fileDiagnostics.slice(0, 20)) { // Limit per file
+            const severity = ['Error', 'Warning', 'Info', 'Hint'][d.severity] || 'Unknown';
+            const line = d.range.start.line + 1;
+            const source = d.source ? ` (${d.source})` : '';
+            const icon = d.severity === 0 ? '❌' : d.severity === 1 ? '⚠️' : 'ℹ️';
+            
+            diagnostics.push(`  ${icon} Line ${line}: [${severity}] ${d.message}${source}`);
+          }
+          
+          if (fileDiagnostics.length > 20) {
+            diagnostics.push(`  ... and ${fileDiagnostics.length - 20} more`);
+          }
+        }
+      }
+
+      if (diagnostics.length === 0) {
+        return '✅ No linter diagnostics found for the specified files.';
+      }
+
+      return `🔍 **Linter Diagnostics**\n${diagnostics.join('\n')}`;
+    } catch (e) {
+      return `❌ Error reading diagnostics: ${this.prettyError(e)}`;
+    }
+  }
+
+  /**
+   * Todo write - manage structured task lists
+   */
+  private todoItems: Array<{ id: string; content: string; status: string }> = [];
+
+  private async todoWrite(_workspacePath: string, args: any): Promise<string> {
+    const todosJson = typeof args?.todos_json === 'string' ? args.todos_json.trim() : '';
+    const merge = args?.merge === 'true' || args?.merge === true;
+
+    if (!todosJson) {
+      // If no todos provided, return current list
+      if (this.todoItems.length === 0) {
+        return '📋 **Todo List** (empty)\n\nNo tasks defined yet.';
+      }
+      return this.formatTodoList();
+    }
+
+    try {
+      const newTodos = JSON.parse(todosJson);
+      
+      if (!Array.isArray(newTodos)) {
+        return '❌ Error: todos_json must be a JSON array';
+      }
+
+      if (merge) {
+        // Merge: update existing or add new
+        for (const todo of newTodos) {
+          if (!todo.id || !todo.content || !todo.status) continue;
+          
+          const existing = this.todoItems.find(t => t.id === todo.id);
+          if (existing) {
+            existing.content = todo.content;
+            existing.status = todo.status;
+          } else {
+            this.todoItems.push({
+              id: todo.id,
+              content: todo.content,
+              status: todo.status,
+            });
+          }
+        }
+      } else {
+        // Replace all
+        this.todoItems = newTodos.filter(t => t.id && t.content && t.status).map(t => ({
+          id: t.id,
+          content: t.content,
+          status: t.status,
+        }));
+      }
+
+      return this.formatTodoList();
+    } catch (e) {
+      return `❌ Error parsing todos_json: ${this.prettyError(e)}\n\nExpected format: [{"id": "1", "content": "Task", "status": "pending"}, ...]`;
+    }
+  }
+
+  private formatTodoList(): string {
+    const statusIcons: Record<string, string> = {
+      pending: '⬜',
+      in_progress: '🔄',
+      completed: '✅',
+      cancelled: '❌',
+    };
+
+    const lines = ['📋 **Todo List**\n'];
+    
+    for (const todo of this.todoItems) {
+      const icon = statusIcons[todo.status] || '❓';
+      lines.push(`${icon} [${todo.id}] ${todo.content} (${todo.status})`);
+    }
+
+    const completed = this.todoItems.filter(t => t.status === 'completed').length;
+    const total = this.todoItems.length;
+    lines.push(`\n📊 Progress: ${completed}/${total} completed`);
+
+    return lines.join('\n');
+  }
+
   async generateDirectoryStructure(workspacePath: string, relPath: string = '.'): Promise<string> {
     try {
       const dirPath = this.resolveSafe(workspacePath, relPath);
@@ -1000,8 +1300,15 @@ export class ShadowFileTools {
       // Search tools
       grep_search: '🔍',
       semantic_search: '🧠',
+      glob_file_search: '🔎',
+      // Modification tools
+      search_replace: '✂️',
+      // Analysis tools
+      read_lints: '🔬',
       // Terminal tools
       terminal_execute: '🖥️',
+      // Task management
+      todo_write: '📋',
     };
     const key = (toolName || '').toLowerCase();
     const emoji = map[key] || '⚙️';

@@ -3,6 +3,15 @@ import { Component } from './Base';
 
 export type HopView = { index: number; thought?: string; tool?: string; output?: string };
 
+/** Response phases for structured streaming (matches orchestrator) */
+export type ResponsePhase = 
+  | 'thinking'       // Internal reasoning
+  | 'tool_selection' // Choosing which tool to use
+  | 'tool_execution' // Running the tool
+  | 'tool_result'    // Result from tool execution
+  | 'final'          // Final response to user
+  | 'error';         // Error occurred
+
 export type MessageBubbleProps = {
   role: 'user' | 'assistant';
   label?: string;
@@ -11,6 +20,8 @@ export type MessageBubbleProps = {
   canCopy?: boolean;
   onCopy?: () => void;
   generating?: boolean;
+  /** Current response phase for structured rendering */
+  phase?: ResponsePhase;
 };
 
 export class MessageBubble extends Component<MessageBubbleProps> {
@@ -43,23 +54,26 @@ export class MessageBubble extends Component<MessageBubbleProps> {
         if (thought) {
           const line = document.createElement('div');
           line.className = 'mini-hud-line';
-          line.innerHTML = `<span class="mini-hud-label">Thought</span><span class="mini-hud-text">${escapeHtml(thought)}</span>`;
+          line.innerHTML = `<span class="mini-hud-icon">💭</span><span class="mini-hud-label">Thought</span><span class="mini-hud-text">${escapeHtml(thought)}</span>`;
           hud.appendChild(line);
         }
         if (tool) {
+          const toolIcon = this.getToolIcon(tool);
           const line = document.createElement('div');
           line.className = 'mini-hud-line';
-          line.innerHTML = `<span class="mini-hud-label">Tool</span><span class="mini-hud-text">${escapeHtml(tool)}</span>`;
+          line.innerHTML = `<span class="mini-hud-icon">${toolIcon}</span><span class="mini-hud-label">Tool</span><span class="mini-hud-text">${escapeHtml(tool)}</span>`;
           hud.appendChild(line);
         }
         if (exec) {
           const line = document.createElement('div');
           line.className = 'mini-hud-line';
-          line.innerHTML = `<span class="mini-hud-label">Result</span><span class="mini-hud-text">${escapeHtml(exec)}</span>`;
+          // Truncate long results for display
+          const truncatedExec = exec.length > 200 ? exec.substring(0, 200) + '...' : exec;
+          line.innerHTML = `<span class="mini-hud-icon">📋</span><span class="mini-hud-label">Result</span><span class="mini-hud-text">${escapeHtml(truncatedExec)}</span>`;
           hud.appendChild(line);
         }
 
-        // Status row
+        // Status row with phase indicator
         const status = document.createElement('div');
         status.className = 'generating-indicator';
         const spinner = document.createElement('div');
@@ -241,6 +255,66 @@ export class MessageBubble extends Component<MessageBubbleProps> {
     if (last.includes('## Execution Result')) return 'Executing Tool...';
     if (last.includes('## Final')) return 'Finalizing Response...';
     return 'Processing...';
+  }
+
+  /**
+   * Get icon for a phase (used in mini-HUD and structured rendering)
+   */
+  private getPhaseIcon(phase: ResponsePhase): string {
+    switch (phase) {
+      case 'thinking': return '💭';
+      case 'tool_selection': return '🔧';
+      case 'tool_execution': return '⚙️';
+      case 'tool_result': return '📋';
+      case 'final': return '✅';
+      case 'error': return '❌';
+      default: return '•';
+    }
+  }
+
+  /**
+   * Get label for a phase
+   */
+  private getPhaseLabel(phase: ResponsePhase): string {
+    switch (phase) {
+      case 'thinking': return 'Thinking';
+      case 'tool_selection': return 'Selecting Tool';
+      case 'tool_execution': return 'Executing';
+      case 'tool_result': return 'Result';
+      case 'final': return 'Complete';
+      case 'error': return 'Error';
+      default: return 'Processing';
+    }
+  }
+
+  /**
+   * Get icon for a tool name
+   */
+  private getToolIcon(toolName: string): string {
+    const toolIcons: Record<string, string> = {
+      simple_query: '💭',
+      final_answer: '✅',
+      read_file: '📖',
+      write_file: '✏️',
+      create_file: '📝',
+      delete_file: '🗑️',
+      rename_file: '🔄',
+      move_file: '📦',
+      copy_file: '📑',
+      open_file: '📂',
+      search_replace: '✂️',
+      grep_search: '🔍',
+      semantic_search: '🧠',
+      glob_file_search: '🔎',
+      directory_structure: '📁',
+      list_files: '📋',
+      list_directories: '📂',
+      create_directory: '📁',
+      read_lints: '🔬',
+      terminal_execute: '🖥️',
+      todo_write: '📋',
+    };
+    return toolIcons[toolName?.toLowerCase()] || '⚙️';
   }
 }
 

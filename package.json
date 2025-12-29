@@ -16,7 +16,7 @@
   ],
   "main": "./out/extension.js",
   "contributes": {
-  "commands": [
+    "commands": [
       {
         "command": "vysor.testInlineCompletion",
         "title": "Vysor: Test Inline Completion",
@@ -146,13 +146,21 @@
           "default": 120000,
           "description": "HTTP request timeout for planner calls (in ms)"
         },
-         "vysor.ocrBaseUrl": {
-           "type": "string",
+        "vysor.ocrBaseUrl": {
+          "type": "string",
           "default": "http://127.0.0.1:8883",
           "description": "Base URL for the OCR/ingestion service (used for file uploads)."
         },
-        "vysor.networkRetries":  { "type": "number", "default": 1, "description": "Automatic retries for planner HTTP calls." },
-        "vysor.networkRetryBackoffMs": { "type": "number", "default": 1500, "description": "Backoff between retries (ms)." },
+        "vysor.networkRetries": {
+          "type": "number",
+          "default": 1,
+          "description": "Automatic retries for planner HTTP calls."
+        },
+        "vysor.networkRetryBackoffMs": {
+          "type": "number",
+          "default": 1500,
+          "description": "Backoff between retries (ms)."
+        },
         "vysor.modelName": {
           "type": "string",
           "default": "default-model",
@@ -205,7 +213,10 @@
         },
         "vysor.inlineCompletion.mode": {
           "type": "string",
-          "enum": ["conservative", "aggressive"],
+          "enum": [
+            "conservative",
+            "aggressive"
+          ],
           "default": "conservative",
           "description": "Completion mode. 'conservative' shows suggestions only when confident; 'aggressive' shows suggestions more often."
         },
@@ -246,6 +257,7 @@
     "typescript": "^5.9.2"
   },
   "dependencies": {
+    "@xenova/transformers": "^2.17.2",
     "axios": "^1.11.0",
     "form-data": "^4.0.0"
   }
