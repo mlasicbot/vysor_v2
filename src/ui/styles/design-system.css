@@ -1,0 +1,178 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   VYSOR DESIGN SYSTEM
+   A distinctive, modern aesthetic for HDL coding assistance
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ─── Color Tokens ─── */
+:root {
+  /* Base colors - Dark theme inspired by silicon wafer aesthetics */
+  --vysor-bg-deep: #0a0e14;
+  --vysor-bg: #0d1117;
+  --vysor-bg-raised: #161b22;
+  --vysor-bg-elevated: #1f2937;
+  --vysor-bg-overlay: rgba(0, 0, 0, 0.7);
+  
+  /* Foreground */
+  --vysor-fg: #e6edf3;
+  --vysor-fg-muted: #7d8590;
+  --vysor-fg-faint: #484f58;
+  
+  /* Accent - Electric cyan inspired by logic analyzer traces */
+  --vysor-accent: #00d4ff;
+  --vysor-accent-muted: rgba(0, 212, 255, 0.15);
+  --vysor-accent-glow: 0 0 20px rgba(0, 212, 255, 0.3);
+  
+  /* Semantic colors */
+  --vysor-success: #3fb950;
+  --vysor-success-bg: rgba(63, 185, 80, 0.1);
+  --vysor-warning: #d29922;
+  --vysor-warning-bg: rgba(210, 153, 34, 0.1);
+  --vysor-error: #f85149;
+  --vysor-error-bg: rgba(248, 81, 73, 0.1);
+  --vysor-info: #58a6ff;
+  --vysor-info-bg: rgba(88, 166, 255, 0.1);
+  
+  /* Phase colors */
+  --vysor-phase-thinking: #a371f7;
+  --vysor-phase-executing: #00d4ff;
+  --vysor-phase-reasoning: #ffd700;
+  --vysor-phase-final: #3fb950;
+  
+  /* Borders */
+  --vysor-border: #30363d;
+  --vysor-border-muted: #21262d;
+  --vysor-border-accent: var(--vysor-accent);
+  
+  /* Typography */
+  --vysor-font-sans: 'JetBrains Mono', 'SF Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace;
+  --vysor-font-display: 'Space Grotesk', 'Inter', system-ui, sans-serif;
+  --vysor-font-size-xs: 10px;
+  --vysor-font-size-sm: 11px;
+  --vysor-font-size-base: 13px;
+  --vysor-font-size-lg: 15px;
+  --vysor-font-size-xl: 18px;
+  
+  /* Spacing */
+  --vysor-space-1: 4px;
+  --vysor-space-2: 8px;
+  --vysor-space-3: 12px;
+  --vysor-space-4: 16px;
+  --vysor-space-5: 20px;
+  --vysor-space-6: 24px;
+  
+  /* Radius */
+  --vysor-radius-sm: 4px;
+  --vysor-radius-md: 8px;
+  --vysor-radius-lg: 12px;
+  --vysor-radius-xl: 16px;
+  
+  /* Shadows */
+  --vysor-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --vysor-shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4);
+  --vysor-shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.5);
+  --vysor-shadow-glow: 0 0 20px rgba(0, 212, 255, 0.15);
+  
+  /* Transitions */
+  --vysor-transition-fast: 0.1s ease;
+  --vysor-transition-base: 0.2s ease;
+  --vysor-transition-slow: 0.3s ease;
+}
+
+/* ─── Base Reset ─── */
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body, #root {
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+  background: var(--vysor-bg);
+  color: var(--vysor-fg);
+  font-family: var(--vysor-font-sans);
+  font-size: var(--vysor-font-size-base);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ─── Scrollbar ─── */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--vysor-border);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--vysor-fg-faint);
+}
+
+/* ─── Focus States ─── */
+:focus-visible {
+  outline: 2px solid var(--vysor-accent);
+  outline-offset: 2px;
+}
+
+/* ─── Animations ─── */
+@keyframes vysor-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+@keyframes vysor-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@keyframes vysor-fade-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes vysor-slide-in {
+  from { opacity: 0; transform: translateX(-8px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes vysor-glow-pulse {
+  0%, 100% { box-shadow: 0 0 8px var(--vysor-accent); }
+  50% { box-shadow: 0 0 16px var(--vysor-accent), 0 0 24px rgba(0, 212, 255, 0.3); }
+}
+
+/* ─── Mode Colors ─── */
+.mode-agent { --mode-color: var(--vysor-accent); }
+.mode-plan { --mode-color: var(--vysor-phase-thinking); }
+.mode-debug { --mode-color: var(--vysor-error); }
+.mode-ask { --mode-color: var(--vysor-info); }
+
+/* ─── Phase Indicators ─── */
+.phase-thinking {
+  --phase-color: var(--vysor-phase-thinking);
+  --phase-bg: rgba(163, 113, 247, 0.1);
+}
+
+.phase-executing {
+  --phase-color: var(--vysor-phase-executing);
+  --phase-bg: rgba(0, 212, 255, 0.1);
+}
+
+.phase-reasoning {
+  --phase-color: var(--vysor-phase-reasoning);
+  --phase-bg: rgba(255, 215, 0, 0.1);
+}
+
+.phase-final {
+  --phase-color: var(--vysor-phase-final);
+  --phase-bg: rgba(63, 185, 80, 0.1);
+}
+

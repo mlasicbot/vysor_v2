@@ -1,5 +1,6 @@
 // src/ui/state.ts
 import type { Session, MentionItem } from './types';
+import type { VysorMode } from './components/ModeSelector';
 
 /**
  * Pending edit from Shadow Workspace (UI representation)
@@ -28,6 +29,20 @@ export interface PendingChangesSummaryUI {
   deletedFiles: number;
 }
 
+/**
+ * Response phase for visual tracking
+ */
+export type ResponsePhaseType = 'thinking' | 'executing' | 'reasoning' | 'final';
+
+export interface ResponsePhaseItem {
+  phase: ResponsePhaseType;
+  label: string;
+  content?: string;
+  toolName?: string;
+  isActive?: boolean;
+  isComplete?: boolean;
+}
+
 export interface UIState {
   sessions: Session[];
   currentId: string;
@@ -46,6 +61,18 @@ export interface UIState {
     queriesSince: number;   // for auto-hide rule
     lastAt?: number;
   };
+  
+  // Mode system
+  currentMode: VysorMode;
+  
+  // Response phases
+  currentPhase: ResponsePhaseType;
+  responsePhases: ResponsePhaseItem[];
+  
+  // File browser for @-mentions
+  fileBrowserOpen: boolean;
+  fileBrowserPath: string;
+  fileBrowserQuery: string;
   
   // Shadow Workspace state
   pendingEdits: PendingEditUI[];
@@ -68,6 +95,18 @@ export const state: UIState = {
   liveTrace: [],
   historyOpen: false,
   ingestion: { status: 'hidden', queriesSince: 0 },
+  
+  // Mode system
+  currentMode: 'agent',
+  
+  // Response phases
+  currentPhase: 'thinking',
+  responsePhases: [],
+  
+  // File browser
+  fileBrowserOpen: false,
+  fileBrowserPath: '.',
+  fileBrowserQuery: '',
   
   // Shadow Workspace initial state
   pendingEdits: [],

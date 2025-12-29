@@ -7,6 +7,7 @@ import * as path from 'path';
 import { ShadowWorkspace } from './shadowWorkspace';
 import { DiffEngine } from './diffEngine';
 import type { PendingEdit, CommitResult, PendingChangesSummary } from './types';
+import { RAGIndex } from '../rag';
 
 /**
  * Configuration for ShadowFileTools
@@ -143,6 +144,8 @@ export class ShadowFileTools {
         // Search tools
         case 'grep_search':
           return this.grepSearch(workspacePath, toolOutput);
+        case 'semantic_search':
+          return this.semanticSearch(workspacePath, toolOutput);
 
         // Terminal tools
         case 'terminal_execute':
@@ -726,6 +729,87 @@ export class ShadowFileTools {
     return binaryExts.includes(ext);
   }
 
+  /**
+   * Semantic search using RAG index
+   */
+  private async semanticSearch(workspacePath: string, args: any): Promise<string> {
+    const query = typeof args?.query === 'string' ? args.query.trim() : '';
+    const pathPrefix = typeof args?.path_prefix === 'string' ? args.path_prefix.trim() : '';
+    const topKStr = typeof args?.top_k === 'string' ? args.top_k.trim() : '10';
+    const language = typeof args?.language === 'string' ? args.language.trim() : '';
+
+    if (!query) {
+      return '❌ Error: No search query provided. Use a complete question like "How does the AXI agent work?"';
+    }
+
+    const topK = parseInt(topKStr, 10) || 10;
+
+    try {
+      // Get or initialize the RAG index
+      const ragIndex = RAGIndex.getInstance(workspacePath);
+      await ragIndex.initialize();
+
+      // Check if index exists
+      if (!ragIndex.isIndexed()) {
+        // Build the index first
+        const stats = await ragIndex.buildIndex((msg, percent) => {
+          // Progress callback (could emit to UI)
+          console.log(`[RAG] ${msg} (${percent}%)`);
+        });
+        
+        if (stats.totalChunks === 0) {
+          return '📚 Index is empty. No supported files found in the workspace.\n\nSupported file types: .sv, .svh, .v, .vh, .py, .ts, .tsx, .js, .jsx';
+        }
+      }
+
+      // Perform the search
+      const results = await ragIndex.search(query, {
+        topK,
+        pathPrefix: pathPrefix || undefined,
+        language: language || undefined,
+        minScore: 0.15,
+      });
+
+      if (results.length === 0) {
+        return `🔍 No results found for: "${query}"\n\nTry rephrasing your question or using grep_search for exact text matching.`;
+      }
+
+      // Format results
+      let output = `🧠 **Semantic Search Results** for: "${query}"\n\n`;
+      output += `Found ${results.length} relevant code sections:\n\n`;
+
+      for (let i = 0; i < results.length; i++) {
+        const { chunk, score, highlight } = results[i];
+        const scorePercent = Math.round(score * 100);
+        
+        output += `---\n\n`;
+        output += `**${i + 1}. ${chunk.filePath}** (${chunk.startLine}-${chunk.endLine}) — ${scorePercent}% match\n`;
+        
+        if (chunk.signature) {
+          output += `\`${chunk.signature}\`\n`;
+        }
+        
+        output += `\n\`\`\`${chunk.language}\n`;
+        // Show first ~20 lines of the chunk
+        const lines = chunk.content.split('\n');
+        const preview = lines.slice(0, 20).join('\n');
+        output += preview;
+        if (lines.length > 20) {
+          output += `\n... (${lines.length - 20} more lines)`;
+        }
+        output += '\n```\n\n';
+      }
+
+      // Add stats
+      const stats = ragIndex.getStats();
+      output += `---\n\n📊 *Index: ${stats.totalFiles} files, ${stats.totalChunks} chunks*`;
+
+      return output;
+    } catch (e) {
+      return `❌ Semantic search error: ${this.prettyError(e)}`;
+    }
+  }
+
   // ═══════════════════════════════════════════════════════════════════════════
   // TERMINAL TOOLS
   // ═══════════════════════════════════════════════════════════════════════════
@@ -915,6 +999,7 @@ export class ShadowFileTools {
       check_file_exists: '🔍', check_directory_exists: '🔎',
       // Search tools
       grep_search: '🔍',
+      semantic_search: '🧠',
       // Terminal tools
       terminal_execute: '🖥️',
     };

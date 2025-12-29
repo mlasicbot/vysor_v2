@@ -1,12 +1,15 @@
 // Webview <-> Extension contracts (TypeScript)
 
+// Mode types
+export type VysorMode = 'agent' | 'plan' | 'debug' | 'ask';
+
 // Webview -> Extension
 export type WebviewOutbound =
   | { type: 'UPLOAD/FILE'; name: string; mime: string; dataBase64: string; sessionId: string }
   | { type: 'CHAT/CLEAR_SESSION'; sessionId: string }
   | { type: 'CHAT/SWITCH_SESSION'; sessionId: string }  // Notify extension when chat changes
   | { type: 'UI/READY' }
-  | { type: 'CHAT/SEND_PROMPT'; prompt: string; contextBlobs: string[]; sessionId: string; titleHint: string }
+  | { type: 'CHAT/SEND_PROMPT'; prompt: string; contextBlobs: string[]; sessionId: string; titleHint: string; mode?: VysorMode }
   | { type: 'CHAT/STOP'; runId: string }
   | { type: 'HISTORY/NEW_SESSION' }
   | { type: 'HISTORY/RENAME'; sessionId: string; title: string }
@@ -14,6 +17,8 @@ export type WebviewOutbound =
   | { type: 'MENTION/QUERY'; q: string }
   | { type: 'MENTION/LIST_DIR'; path: string }
   | { type: 'MENTION/READ_FILE'; path: string }
+  // Mode system
+  | { type: 'MODE/CHANGE'; mode: VysorMode }
   // Shadow Workspace messages
   | { type: 'SHADOW/GET_PENDING' }
   | { type: 'SHADOW/ACCEPT_EDIT'; editId: string }

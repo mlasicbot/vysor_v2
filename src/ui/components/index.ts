@@ -14,3 +14,8 @@ export * from './MentionsPopup';
 export * from './HistoryPanel';
 export * from './TraceView';
 export * from './PendingChangesCard';
+
+// New components
+export * from './ModeSelector';
+export * from './ResponsePhases';
+export * from './FileBrowser';

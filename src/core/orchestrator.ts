@@ -159,7 +159,8 @@ export class Orchestrator {
     before: string,
     after: string,
     languageId: string,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    lints?: Array<{ line: number; message: string; severity: string; source?: string }>
   ): Promise<string> {
     // Compose a compact trajectory/prompt tailored for completions.
     // Keep it short for low-latency: only send last ~1000 chars before cursor.
@@ -167,15 +168,34 @@ export class Orchestrator {
     const ctxBefore = before.length > maxBefore ? before.slice(-maxBefore) : before;
     const ctxAfter = (after || '').slice(0, 512);
 
+    // Format lint information if available
+    let lintContext = '';
+    if (lints && lints.length > 0) {
+      const relevantLints = lints.slice(0, 5).map(l => 
+        `  - Line ${l.line}: [${l.severity.toUpperCase()}] ${l.message}${l.source ? ` (${l.source})` : ''}`
+      ).join('\n');
+      lintContext = `
+### LINTER DIAGNOSTICS (consider fixing these):
+${relevantLints}
+`;
+    }
+
     const prompt = [
       '### TASK: Provide a concise inline completion for the code at the cursor.',
       `### LANGUAGE: ${languageId}`,
+      lintContext,
       '### CONTEXT BEFORE:',
       ctxBefore,
       '### CONTEXT AFTER:',
       ctxAfter,
-      '### INSTRUCTIONS: Return only the text that should be inserted at the cursor (no surrounding commentary). Prefer minimal, syntactically correct completions. Do not repeat existing text before the cursor.'
-    ].join('\n');
+      '### INSTRUCTIONS:',
+      '- Return only the text that should be inserted at the cursor.',
+      '- Prefer minimal, syntactically correct completions.',
+      '- Do not repeat existing text before the cursor.',
+      lints && lints.length > 0 
+        ? '- If the completion can help fix a nearby lint error, prefer that fix.'
+        : '',
+    ].filter(Boolean).join('\n');
 
     try {
       const resp = await this.planner.think({ trajectory: prompt }, signal);

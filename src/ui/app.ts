@@ -1,8 +1,9 @@
 import { send, onMessage } from './bus';
 import { state, current, stringify } from './state';
 import type { ExtensionInbound } from './types';
-import { Toolbar, MessageList, Composer, HistoryPanel, PendingChangesCard } from './components/index';
+import { Toolbar, MessageList, Composer, HistoryPanel, PendingChangesCard, FileBrowser } from './components/index';
 import type { MessageBubbleProps } from './components/MessageBubble';
+import type { VysorMode } from './components/ModeSelector';
 
 console.log('=== VYSOR UI LOADING ==='); // Basic debug
 console.log('Current time:', new Date().toISOString()); // Basic debug
@@ -20,19 +21,24 @@ const root = document.getElementById('root')!;
 console.log('Root element found:', root); // Basic debug
 console.log('Document ready state:', document.readyState); // Basic debug
 
-let toolbar: Toolbar, composer: Composer, historyPanel: HistoryPanel, messageList: MessageList, pendingChangesCard: PendingChangesCard;
+let toolbar: Toolbar, composer: Composer, historyPanel: HistoryPanel, messageList: MessageList, pendingChangesCard: PendingChangesCard, fileBrowser: FileBrowser | null = null;
 
 function render() {
   console.log('=== RENDER FUNCTION CALLED ==='); // Basic debug
   root.innerHTML = '';
   const title = current()?.title ?? 'New chat';
 
-  // Top bar
-  console.log('Creating toolbar with onClearChat function'); // Debug log
+  // Top bar with mode selector
   toolbar = new Toolbar().mount(root, {
     title,
+    currentMode: state.currentMode,
     onNewChat: () => send({ type: 'HISTORY/NEW_SESSION' }),
     onToggleHistory: () => { state.historyOpen = !state.historyOpen; render(); },
+    onModeChange: (mode: VysorMode) => {
+      state.currentMode = mode;
+      send({ type: 'MODE/CHANGE', mode });
+      render();
+    },
   });
 
   // Messages

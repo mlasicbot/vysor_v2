@@ -310,11 +310,37 @@ export async function activate(context: vscode.ExtensionContext) {
                     return document.getText(new vscode.Range(position, endPos)).slice(0, 512);
                   })();
 
-                  log.info('[inline] calling orchestrator', { uri: docUri, beforeLen: before.length, afterLen: after.length });
-                  console.log('[inline] calling orchestrator', docUri, 'beforeLen', before.length, 'afterLen', after.length);
+                  // Get lint diagnostics for the current file (nearby the cursor)
+                  const diagnostics = vscode.languages.getDiagnostics(document.uri);
+                  const cursorLine = position.line;
+                  const nearbyLints = diagnostics
+                    .filter(d => Math.abs(d.range.start.line - cursorLine) <= 10)
+                    .slice(0, 5)
+                    .map(d => ({
+                      line: d.range.start.line + 1,
+                      message: d.message,
+                      severity: d.severity === vscode.DiagnosticSeverity.Error ? 'error' 
+                        : d.severity === vscode.DiagnosticSeverity.Warning ? 'warning' 
+                        : 'info',
+                      source: d.source,
+                    }));
+
+                  log.info('[inline] calling orchestrator', { 
+                    uri: docUri, 
+                    beforeLen: before.length, 
+                    afterLen: after.length,
+                    lintsNearby: nearbyLints.length 
+                  });
+                  console.log('[inline] calling orchestrator', docUri, 'beforeLen', before.length, 'afterLen', after.length, 'lints', nearbyLints.length);
 
                   const startTs = Date.now();
-                  const completionText = await orchestrator.generateInlineCompletion(before, after, document.languageId, abortController.signal);
+                  const completionText = await orchestrator.generateInlineCompletion(
+                    before, 
+                    after, 
+                    document.languageId, 
+                    abortController.signal,
+                    nearbyLints
+                  );
                   const elapsed = Date.now() - startTs;
 
                   log.info('[inline] orchestrator returned', { uri: docUri, len: (completionText || '').length, elapsedMs: elapsed });
