@@ -140,6 +140,14 @@ export class ShadowFileTools {
         case 'check_directory_exists':
           return this.checkDirectoryExists(workspacePath, toolOutput);
 
+        // Search tools
+        case 'grep_search':
+          return this.grepSearch(workspacePath, toolOutput);
+
+        // Terminal tools
+        case 'terminal_execute':
+          return this.terminalExecute(workspacePath, toolOutput);
+
         default:
           if (typeof toolOutput === 'object' && toolOutput && 'answer' in toolOutput) {
             return String(toolOutput.answer);
@@ -593,6 +601,232 @@ export class ShadowFileTools {
     }
   }
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // SEARCH TOOLS
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  private async grepSearch(workspacePath: string, args: any): Promise<string> {
+    const pattern = typeof args?.pattern === 'string' ? args.pattern.trim() : '';
+    const searchPath = typeof args?.file_path === 'string' ? args.file_path.trim() : '.';
+    const fileGlob = typeof args?.file_glob === 'string' ? args.file_glob.trim() : '';
+    const caseSensitive = args?.case_sensitive === 'true';
+
+    if (!pattern) {
+      return '❌ Error: No search pattern provided';
+    }
+
+    const targetPath = this.resolveSafe(workspacePath, searchPath || '.');
+    
+    try {
+      // Build regex
+      let regex: RegExp;
+      try {
+        regex = new RegExp(pattern, caseSensitive ? 'g' : 'gi');
+      } catch (e) {
+        return `❌ Invalid regex pattern: ${pattern}`;
+      }
+
+      const results: string[] = [];
+      const maxResults = 100;
+      const maxFileSize = 1024 * 1024; // 1 MiB
+
+      // Recursively search files
+      await this.searchFiles(targetPath, workspacePath, regex, fileGlob, results, maxResults, maxFileSize);
+
+      if (results.length === 0) {
+        return `🔍 No matches found for pattern: \`${pattern}\`\n\nSearched in: ${searchPath}${fileGlob ? ` (files: ${fileGlob})` : ''}`;
+      }
+
+      const header = `🔍 **Found ${results.length}${results.length >= maxResults ? '+' : ''} matches** for \`${pattern}\`\n\n`;
+      return header + results.join('\n');
+    } catch (e) {
+      return `❌ Search error: ${this.prettyError(e)}`;
+    }
+  }
+
+  private async searchFiles(
+    dirPath: string,
+    workspacePath: string,
+    regex: RegExp,
+    fileGlob: string,
+    results: string[],
+    maxResults: number,
+    maxFileSize: number
+  ): Promise<void> {
+    if (results.length >= maxResults) return;
+
+    try {
+      const entries = await fs.readdir(dirPath, { withFileTypes: true });
+      
+      for (const entry of entries) {
+        if (results.length >= maxResults) break;
+
+        const fullPath = path.join(dirPath, entry.name);
+        const relPath = path.relative(workspacePath, fullPath).replace(/\\/g, '/');
+
+        // Skip common non-searchable directories
+        if (entry.isDirectory()) {
+          const skipDirs = ['node_modules', '.git', '.venv', '__pycache__', 'dist', 'out', 'build', '.cache'];
+          if (skipDirs.includes(entry.name)) continue;
+          
+          await this.searchFiles(fullPath, workspacePath, regex, fileGlob, results, maxResults, maxFileSize);
+          continue;
+        }
+
+        // Skip non-matching globs
+        if (fileGlob && !this.matchGlob(entry.name, fileGlob)) continue;
+
+        // Skip binary/large files
+        try {
+          const stat = await fs.stat(fullPath);
+          if (stat.size > maxFileSize) continue;
+          if (this.isBinaryFile(entry.name)) continue;
+
+          const content = await fs.readFile(fullPath, 'utf8');
+          const lines = content.split('\n');
+          
+          for (let i = 0; i < lines.length && results.length < maxResults; i++) {
+            const line = lines[i];
+            regex.lastIndex = 0; // Reset for global regex
+            if (regex.test(line)) {
+              const lineNum = i + 1;
+              const trimmedLine = line.trim().substring(0, 120);
+              results.push(`**${relPath}:${lineNum}** ${trimmedLine}`);
+            }
+          }
+        } catch {
+          // Skip files that can't be read
+        }
+      }
+    } catch {
+      // Skip directories that can't be read
+    }
+  }
+
+  private matchGlob(filename: string, glob: string): boolean {
+    // Simple glob matching: *.sv, *.v, *.py, etc.
+    if (glob.startsWith('*.')) {
+      const ext = glob.slice(1); // .sv, .v, .py
+      return filename.endsWith(ext);
+    }
+    return filename.includes(glob);
+  }
+
+  private isBinaryFile(filename: string): boolean {
+    const binaryExts = [
+      '.exe', '.dll', '.so', '.dylib', '.bin', '.o', '.a',
+      '.png', '.jpg', '.jpeg', '.gif', '.ico', '.bmp', '.webp',
+      '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
+      '.zip', '.tar', '.gz', '.rar', '.7z',
+      '.mp3', '.mp4', '.avi', '.mov', '.mkv',
+      '.woff', '.woff2', '.ttf', '.eot',
+      '.pyc', '.pyo', '.class',
+    ];
+    const ext = path.extname(filename).toLowerCase();
+    return binaryExts.includes(ext);
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // TERMINAL TOOLS
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  private async terminalExecute(workspacePath: string, args: any): Promise<string> {
+    const command = typeof args?.command === 'string' ? args.command.trim() : '';
+    const workingDir = typeof args?.working_directory === 'string' ? args.working_directory.trim() : '.';
+    const timeoutStr = typeof args?.timeout_seconds === 'string' ? args.timeout_seconds.trim() : '30';
+
+    if (!command) {
+      return '❌ Error: No command provided';
+    }
+
+    // Parse timeout
+    let timeoutMs = 30000;
+    const parsedTimeout = parseInt(timeoutStr, 10);
+    if (!isNaN(parsedTimeout) && parsedTimeout > 0) {
+      timeoutMs = parsedTimeout * 1000;
+    } else if (parsedTimeout === 0) {
+      timeoutMs = 0; // No timeout
+    }
+
+    // Validate and resolve working directory
+    const cwd = this.resolveSafe(workspacePath, workingDir || '.');
+
+    // Safety: Block dangerous commands
+    const dangerousPatterns = [
+      /^\s*sudo\b/i,
+      /^\s*rm\s+-rf\s+[\/~]/i,
+      /^\s*:(){ :|:& };:/,  // Fork bomb
+      />\s*\/dev\/sd/i,
+      /mkfs\b/i,
+      /dd\s+.*of=\/dev/i,
+    ];
+
+    for (const pattern of dangerousPatterns) {
+      if (pattern.test(command)) {
+        return `❌ Command blocked for safety: ${command}`;
+      }
+    }
+
+    try {
+      const { exec } = await import('child_process');
+      const { promisify } = await import('util');
+      const execAsync = promisify(exec);
+
+      const result = await execAsync(command, {
+        cwd,
+        timeout: timeoutMs || undefined,
+        maxBuffer: 1024 * 1024, // 1 MiB
+        env: {
+          ...process.env,
+          PATH: process.env.PATH,
+          HOME: process.env.HOME,
+        },
+      });
+
+      const stdout = (result.stdout || '').trim();
+      const stderr = (result.stderr || '').trim();
+
+      let output = `🖥️ **Command:** \`${command}\`\n`;
+      output += `📁 **Working directory:** ${workingDir}\n\n`;
+
+      if (stdout) {
+        output += `**Output:**\n\`\`\`\n${stdout.substring(0, 8000)}\n\`\`\`\n`;
+      }
+      if (stderr) {
+        output += `**Stderr:**\n\`\`\`\n${stderr.substring(0, 2000)}\n\`\`\`\n`;
+      }
+      if (!stdout && !stderr) {
+        output += `✅ Command completed with no output.`;
+      }
+
+      return output;
+    } catch (e: any) {
+      const error = e as { stdout?: string; stderr?: string; message?: string; killed?: boolean; code?: number };
+      
+      let output = `🖥️ **Command:** \`${command}\`\n`;
+      output += `📁 **Working directory:** ${workingDir}\n\n`;
+
+      if (error.killed) {
+        output += `⏱️ **Timeout:** Command exceeded ${timeoutMs / 1000}s limit\n`;
+      }
+
+      if (error.stdout) {
+        output += `**Output:**\n\`\`\`\n${error.stdout.substring(0, 4000)}\n\`\`\`\n`;
+      }
+      if (error.stderr) {
+        output += `**Error:**\n\`\`\`\n${error.stderr.substring(0, 4000)}\n\`\`\`\n`;
+      }
+      if (error.code !== undefined) {
+        output += `\n❌ **Exit code:** ${error.code}`;
+      }
+      if (!error.stdout && !error.stderr && error.message) {
+        output += `❌ **Error:** ${error.message}`;
+      }
+
+      return output;
+    }
+  }
+
   async generateDirectoryStructure(workspacePath: string, relPath: string = '.'): Promise<string> {
     try {
       const dirPath = this.resolveSafe(workspacePath, relPath);
@@ -679,6 +913,10 @@ export class ShadowFileTools {
       create_directory: '📁', list_files: '📋', list_directories: '📂', directory_structure: '📁',
       rename_directory: '🔄', move_directory: '📦', copy_directory: '📑', delete_directory: '🗑️',
       check_file_exists: '🔍', check_directory_exists: '🔎',
+      // Search tools
+      grep_search: '🔍',
+      // Terminal tools
+      terminal_execute: '🖥️',
     };
     const key = (toolName || '').toLowerCase();
     const emoji = map[key] || '⚙️';

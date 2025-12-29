@@ -21,8 +21,94 @@
         "command": "vysor.testInlineCompletion",
         "title": "Vysor: Test Inline Completion",
         "category": "Vysor"
+      },
+      {
+        "command": "vysor.shadow.acceptAll",
+        "title": "Keep All Changes",
+        "category": "Vysor",
+        "icon": "$(check-all)"
+      },
+      {
+        "command": "vysor.shadow.review",
+        "title": "Review Changes",
+        "category": "Vysor",
+        "icon": "$(diff)"
+      },
+      {
+        "command": "vysor.shadow.rejectAll",
+        "title": "Undo All Changes",
+        "category": "Vysor",
+        "icon": "$(discard)"
+      },
+      {
+        "command": "vysor.shadow.acceptFile",
+        "title": "Keep This File",
+        "category": "Vysor",
+        "icon": "$(check)"
+      },
+      {
+        "command": "vysor.shadow.rejectFile",
+        "title": "Undo This File",
+        "category": "Vysor",
+        "icon": "$(close)"
+      },
+      {
+        "command": "vysor.shadow.showDiff",
+        "title": "Show Diff",
+        "category": "Vysor",
+        "icon": "$(diff)"
       }
-        ],
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "vysor.shadow.acceptAll",
+          "when": "vysor.hasPendingChanges",
+          "group": "navigation@1"
+        },
+        {
+          "command": "vysor.shadow.review",
+          "when": "vysor.hasPendingChanges",
+          "group": "navigation@2"
+        },
+        {
+          "command": "vysor.shadow.rejectAll",
+          "when": "vysor.hasPendingChanges",
+          "group": "navigation@3"
+        }
+      ],
+      "editor/title/context": [
+        {
+          "command": "vysor.shadow.acceptFile",
+          "when": "vysor.fileHasPendingChanges",
+          "group": "vysor@1"
+        },
+        {
+          "command": "vysor.shadow.rejectFile",
+          "when": "vysor.fileHasPendingChanges",
+          "group": "vysor@2"
+        },
+        {
+          "command": "vysor.shadow.showDiff",
+          "when": "vysor.fileHasPendingChanges",
+          "group": "vysor@3"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "vysor.shadow.acceptAll",
+          "when": "vysor.hasPendingChanges"
+        },
+        {
+          "command": "vysor.shadow.review",
+          "when": "vysor.hasPendingChanges"
+        },
+        {
+          "command": "vysor.shadow.rejectAll",
+          "when": "vysor.hasPendingChanges"
+        }
+      ]
+    },
     "viewsContainers": {
       "activitybar": [
         {
@@ -47,7 +133,7 @@
       "properties": {
         "vysor.plannerBaseUrl": {
           "type": "string",
-          "default": "http://localhost:8000",
+          "default": "http://localhost:8884",
           "description": "Base URL for the planner backend"
         },
         "vysor.maxIterations": {
@@ -62,7 +148,7 @@
         },
          "vysor.ocrBaseUrl": {
            "type": "string",
-          "default": "http://127.0.0.1:8889",
+          "default": "http://127.0.0.1:8883",
           "description": "Base URL for the OCR/ingestion service (used for file uploads)."
         },
         "vysor.networkRetries":  { "type": "number", "default": 1, "description": "Automatic retries for planner HTTP calls." },
